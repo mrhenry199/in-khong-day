@@ -60,6 +60,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         if (!_settings.Current.Printers.Any(p => p.Enabled))
             report += "\n[!] Chưa chọn máy in để phát trên LAN. Mở Settings và chọn máy in.";
         if (_server.LastError is { } error) report += "\n[!] " + error;
+        foreach (var queue in _settings.Current.Printers.Where(p => p.Enabled))
+            report += $"\n[i] {queue.WindowsPrinterName}: ipp://{NetworkHelper.GetLocalIPv4Address()}:{_server.BoundPort}/printers/{Uri.EscapeDataString(PrinterIdentity.GetQueuePath(queue))}";
         return report;
     }
 
@@ -173,7 +175,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         AddMenuItem("Settings...", AppIcons.Settings, ShowSettings);
         AddMenuItem("Print Jobs...", AppIcons.List, ShowPrintJobs);
         AddMenuItem("View Web Dashboard", AppIcons.Globe, OpenWebDashboard);
-        AddMenuItem("Configure Firewall", AppIcons.Lock, () => FirewallHelper.AddFirewallRules(port));
+        AddMenuItem("Configure Firewall", AppIcons.Lock, () => FirewallSetup.Show(port));
         AddMenuItem("Refresh Printers", AppIcons.Refresh, RefreshPrinters);
 
         _contextMenu.Items.Add(new ToolStripSeparator());

@@ -6,7 +6,7 @@ Máy Windows x64 kết nối máy in USB nhận lệnh IPP của thiết bị tr
 
 Giải nén gói standalone Windows x64 rồi chạy PrintBridge.exe. Gói đi kèm .NET, Windows Desktop và ASP.NET Core. Bảng thiết lập mở lần đầu để kiểm tra driver, chọn máy in và cấu hình firewall. Nhấn Hoàn tất để lưu. Mở lại bảng từ menu khay hệ thống. Trên điện thoại cùng LAN, mở In trong ứng dụng và chọn tên máy in. Máy chủ cần bật và kết nối mạng.
 
-Khi mở, ứng dụng đọc trạng thái spooler, danh sách hàng đợi, tệp driver, thiết bị PnP, profile mạng và quy tắc firewall của ứng dụng. Lỗi được hiện trong hộp thoại. Chọn **Kiểm tra máy in và mạng LAN** trong menu khay để xem lại, kể cả khi mọi kiểm tra đều đạt. Chỉ dùng Configure Firewall trên LAN tin cậy. Dashboard quản trị mở trên localhost. Kiểm tra từ host không xác nhận được multicast qua router, quy tắc chặn của bên thứ ba hoặc khả năng ra giấy. Hãy thử một trang trên thiết bị khách.
+Khi mở, ứng dụng đọc trạng thái spooler, danh sách hàng đợi, tệp driver, thiết bị PnP, profile mạng và quy tắc firewall của ứng dụng. Lỗi được hiện trong hộp thoại. Chọn **Kiểm tra máy in và mạng LAN** trong menu khay để xem lại, kể cả khi mọi kiểm tra đều đạt. Nếu máy chủ dùng profile Public trên LAN tin cậy, chọn Configure Firewall → Public, nhập IPv4 máy chủ và IPv4 của một máy khách. Quy tắc chỉ cho phép TCP/IPP cho PrintBridge.exe trên card mạng và cặp địa chỉ đã chọn. Thêm máy in trên máy khách qua URL IPP trong báo cáo kiểm tra. Nếu đổi IP hoặc di chuyển file exe, chạy lại thiết lập firewall với thông tin mới. Dashboard quản trị mở trên localhost. Kiểm tra từ host không xác nhận được multicast qua router, quy tắc chặn của bên thứ ba hoặc khả năng ra giấy. Hãy thử một trang trên thiết bị khách.
 
 ## In từ thiết bị khác
 

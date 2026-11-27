@@ -361,13 +361,7 @@ public sealed class SettingsForm : Form
 
     private void OpenFirewallPorts()
     {
-        var ok = FirewallHelper.AddFirewallRules((int)_portInput.Value);
-        if (ok)
-        {
-            MessageBox.Show(
-                "Windows Firewall rules have been added for TCP port 631 (IPP) and UDP port 5353 (mDNS / AirPrint)!",
-                "Firewall Configured", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
+        FirewallSetup.Show(_server.BoundPort);
     }
 
     private void SaveSettingsAndClose()

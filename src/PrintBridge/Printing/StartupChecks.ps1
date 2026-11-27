@@ -1,4 +1,4 @@
-param([int]$IppPort, [string]$SelectedQueues)
+param([int]$IppPort, [string]$SelectedQueues, [int]$BridgePid)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
@@ -37,12 +37,30 @@ try {
 try {
     $profiles = @(Get-NetConnectionProfile -ErrorAction Stop)
     $trusted = @($profiles | Where-Object NetworkCategory -in @('Private','DomainAuthenticated'))
-    if (!$trusted.Count) {
-        foreach ($network in $profiles) { "[i] $($network.InterfaceAlias): $($network.NetworkCategory)" }
-        '[!] Chưa có mạng Private/Domain. Kiểm tra kết nối; chỉ chọn Private nếu đây là LAN tin cậy.'
-        "[i] Chưa đánh giá quy tắc TCP/$IppPort và UDP/5353 vì chưa có profile LAN phù hợp. Kiểm tra lại sau khi kết nối."
-        return
+    $listen = @(Get-NetTCPConnection -State Listen -OwningProcess $BridgePid -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -eq $IppPort -and $_.LocalAddress -notin @('127.0.0.1','::1') })
+    if ($listen.Count) { "[OK] PrintBridge đang lắng nghe TCP/$IppPort." }
+    else { "[!] Chưa xác minh được PrintBridge lắng nghe TCP/$IppPort. Kiểm tra lỗi khởi động hoặc cổng bị chiếm." }
+    $exe = (Get-Process -Id $BridgePid).Path
+    foreach ($network in @($profiles | Where-Object NetworkCategory -eq 'Public')) {
+        $local = @(Get-NetIPAddress -InterfaceIndex $network.InterfaceIndex -AddressFamily IPv4 | Select-Object -ExpandProperty IPAddress)
+        $found = $false
+        foreach ($rule in @(Get-NetFirewallRule -Group 'PrintBridge Public IPP' -PolicyStore ActiveStore -ErrorAction SilentlyContinue)) {
+            if ($rule.Enabled -ne 'True' -or $rule.Action -ne 'Allow' -or $rule.Direction -ne 'Inbound' -or $rule.Profile -ne 'Public') { continue }
+            $ports = $rule | Get-NetFirewallPortFilter
+            $ips = $rule | Get-NetFirewallAddressFilter
+            $app = $rule | Get-NetFirewallApplicationFilter
+            $iface = $rule | Get-NetFirewallInterfaceFilter
+            if ($ports.Protocol -in @('TCP','6') -and $ports.LocalPort -contains [string]$IppPort -and ([string]$ips.LocalAddress) -in $local -and
+                $app.Program -eq $exe -and $iface.InterfaceAlias -contains $network.InterfaceAlias -and $rule.Name -eq "PrintBridge.Public.$($ips.LocalAddress).$($ips.RemoteAddress)") {
+                "[OK] Public: quy tắc IPP cho $($ips.RemoteAddress) tới $($ips.LocalAddress), TCP/$IppPort."
+                $found = $true
+            }
+        }
+        if (!$found) { "[!] $($network.InterfaceAlias) Public: vào Configure Firewall → Public, nhập IP máy khách để cho phép in bằng IPP." }
     }
+    if (!$profiles.Count) { '[!] Chưa tìm thấy kết nối LAN.' }
+    if (!$trusted.Count) { return }
     foreach ($network in $trusted) { "[OK] LAN $($network.InterfaceAlias): $($network.NetworkCategory)" }
     foreach ($entry in @(@('TCP',$IppPort,'PrintBridge IPP Server (TCP 631)'),@('UDP',5353,'PrintBridge mDNS Discovery (UDP 5353)'))) {
         $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $entry[2] -ErrorAction SilentlyContinue |

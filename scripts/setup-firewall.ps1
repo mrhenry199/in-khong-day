@@ -1,6 +1,25 @@
 #Requires -RunAsAdministrator
-param([ValidateRange(1,65535)][int]$IppPort = 631, [switch]$Remove)
+param([ValidateRange(1,65535)][int]$IppPort = 631, [switch]$Remove,
+      [ipaddress]$LocalIPv4, [ipaddress]$ClientIPv4, [string]$AppBase64)
 $ErrorActionPreference = 'Stop'
+$group = 'PrintBridge Public IPP'
+if ($ClientIPv4) {
+    $address = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $LocalIPv4.IPAddressToString -ErrorAction Stop
+    $profile = Get-NetConnectionProfile -InterfaceIndex $address.InterfaceIndex
+    if ($profile.NetworkCategory -ne 'Public') { throw 'Selected interface must be Public.' }
+    $exe = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($AppBase64))
+    $name = "PrintBridge.Public.$($LocalIPv4.IPAddressToString).$($ClientIPv4.IPAddressToString)"
+    $params = @{Profile='Public'; Direction='Inbound'; Action='Allow'; Protocol='TCP'; LocalPort=$IppPort;
+        LocalAddress=$LocalIPv4.IPAddressToString; RemoteAddress=$ClientIPv4.IPAddressToString;
+        Program=$exe; InterfaceAlias=$address.InterfaceAlias; Enabled='True'}
+    if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
+        Set-NetFirewallRule -Name $name @params
+    } else {
+        New-NetFirewallRule -Name $name -DisplayName $name -Group $group @params | Out-Null
+    }
+    return
+}
+if ($Remove) { Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
 $ipp = 'PrintBridge IPP Server (TCP 631)'
 $mdns = 'PrintBridge mDNS Discovery (UDP 5353)'
 foreach ($name in @($ipp,$mdns,'PrintBridge Application','PrintBridge mDNS (UDP 5353)')) {

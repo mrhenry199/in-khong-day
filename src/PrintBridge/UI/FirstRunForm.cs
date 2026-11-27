@@ -35,8 +35,7 @@ internal sealed class FirstRunForm : Form
         AddButton("Chọn máy in", configurePrinters);
         AddButton("Cấu hình firewall", () =>
         {
-            if (!FirewallHelper.AddFirewallRules(port()))
-                MessageBox.Show(this, "Chưa cấu hình được firewall. Kiểm tra quyền quản trị và thử lại.");
+            FirewallSetup.Show(port());
             _ = RefreshAsync();
         });
         AddButton("Kiểm tra lại", () => _ = RefreshAsync());

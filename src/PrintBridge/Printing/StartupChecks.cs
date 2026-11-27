@@ -13,7 +13,7 @@ internal static class StartupChecks
                 ?? throw new InvalidOperationException("Thiếu chương trình kiểm tra cấu hình.");
             using var reader = new StreamReader(stream);
             var names = Convert.ToBase64String(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(queues));
-            var script = "& {\n" + await reader.ReadToEndAsync() + "\n} " + port + " '" + names + "'";
+            var script = "& {\n" + await reader.ReadToEndAsync() + "\n} " + port + " '" + names + "' " + Environment.ProcessId;
             var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe"))
             {
                 CreateNoWindow = true, UseShellExecute = false, RedirectStandardOutput = true,

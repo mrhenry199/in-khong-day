@@ -8,6 +8,13 @@ public static class FirewallHelper
     public static bool AddFirewallRules(int ippPort = 631) =>
         ippPort is >= 1 and <= 65535 && Run("-IppPort " + ippPort);
 
+    internal static bool AllowClient(int port, System.Net.IPAddress local, System.Net.IPAddress remote)
+    {
+        if (port is < 1 or > 65535 || Environment.ProcessPath is not { } path) return false;
+        var executable = Convert.ToBase64String(Encoding.UTF8.GetBytes(path));
+        return Run($"-IppPort {port} -LocalIPv4 '{local}' -ClientIPv4 '{remote}' -AppBase64 '{executable}'");
+    }
+
     public static void RemoveFirewallRules() => Run("-Remove");
 
     private static bool Run(string arguments)
