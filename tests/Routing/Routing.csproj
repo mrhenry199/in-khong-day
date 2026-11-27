@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../src/PrintBridge/Ipp/IppAttributes.cs;../../src/PrintBridge/Ipp/IppServer.cs;../../src/PrintBridge/Models/*.cs;../../src/PrintBridge/Network/NetworkHelper.cs;../../src/PrintBridge/Settings/SettingsManager.cs;../../src/PrintBridge/Printing/PrintOptions.cs" />
+    <Compile Include="../../src/PrintBridge/Ipp/IppAttributes.cs;../../src/PrintBridge/Ipp/IppServer.cs;../../src/PrintBridge/Models/*.cs;../../src/PrintBridge/Network/*.cs;../../src/PrintBridge/Settings/SettingsManager.cs;../../src/PrintBridge/Printing/PrintOptions.cs" />
   </ItemGroup>
 </Project>

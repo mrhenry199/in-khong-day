@@ -34,6 +34,11 @@ Check(Send(6, "A_printer", id, true) == 0x404, "duplicate submission");
 Check(spool.Count == 1, "single spooler dispatch");
 Check((int)PrintJobState.Aborted == 8 && (int)PrintJobState.Canceled == 7, "IPP job-state codes");
 
+var local = System.Net.IPAddress.Parse("192.0.2.22");
+var neighbors = PrintBridge.Network.LanDiscovery.ProbeAddresses(local, 30).Select(ip => ip.ToString()).ToArray();
+Check(neighbors.SequenceEqual(new[] { "192.0.2.21" }), "LAN probe stays in subnet and excludes self and broadcast");
+Check(PrintBridge.Network.LanDiscovery.ProbeAddresses(local, 16).Count() == 253, "large subnet scan bounded");
+
 namespace PrintBridge.Printing
 {
     public sealed class WindowsPrinterBridge

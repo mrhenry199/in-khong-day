@@ -17,6 +17,12 @@ if ($ClientIPv4) {
     } else {
         New-NetFirewallRule -Name $name -DisplayName $name -Group $group @params | Out-Null
     }
+    $active = Get-NetFirewallRule -Name $name -PolicyStore ActiveStore -ErrorAction Stop
+    if ($active.Enabled -ne 'True' -or $active.Action -ne 'Allow') { throw "Rule $name is not active." }
+    $policy = Get-NetFirewallProfile -Name Public -PolicyStore ActiveStore
+    if ($policy.Enabled -eq 'True' -and ($policy.AllowInboundRules -eq 'False' -or $policy.AllowLocalFirewallRules -eq 'False')) {
+        throw 'Windows policy disables inbound or local firewall rules on Public. Contact your administrator.'
+    }
     return
 }
 if ($Remove) { Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule }

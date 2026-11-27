@@ -23,7 +23,9 @@ public static class FirewallHelper
         {
             using var stream = typeof(FirewallHelper).Assembly.GetManifestResourceStream("Firewall.ps1")!;
             using var reader = new StreamReader(stream);
-            var command = "& {\n" + reader.ReadToEnd() + "\n} " + arguments;
+            var command = "try { & {\n" + reader.ReadToEnd() + "\n} " + arguments +
+                "; exit 0 } catch { Add-Type -AssemblyName System.Windows.Forms; " +
+                "[void][System.Windows.Forms.MessageBox]::Show($_.Exception.Message, 'PrintBridge - Windows Firewall'); exit 1 }";
             var encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
             using var process = Process.Start(new ProcessStartInfo
             {

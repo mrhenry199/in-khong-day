@@ -4,6 +4,7 @@ $script:created = 0
 $script:updated = 0
 function Get-NetIPAddress { [pscustomobject]@{IPAddress='192.0.2.10';InterfaceIndex=7;InterfaceAlias='Wi-Fi'} }
 function Get-NetConnectionProfile { [pscustomobject]@{InterfaceIndex=7;InterfaceAlias='Wi-Fi';NetworkCategory='Public'} }
+function Get-NetFirewallProfile { [pscustomobject]@{Enabled='True';AllowInboundRules='NotConfigured';AllowLocalFirewallRules='True'} }
 function Get-NetFirewallRule { $global:MockBridgeRule }
 function New-NetFirewallRule {
     param($Name,$Profile,$Direction,$Action,$Protocol,$LocalPort,$LocalAddress,$RemoteAddress,$Program,$InterfaceAlias,$Enabled)

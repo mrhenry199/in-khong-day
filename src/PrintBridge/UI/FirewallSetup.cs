@@ -8,20 +8,47 @@ internal static class FirewallSetup
 {
     internal static void Show(int port)
     {
-        using var form = new Form { Text = "Cấu hình firewall", ClientSize = new Size(490, 240),
+        using var form = new Form { Text = "Cấu hình firewall", ClientSize = new Size(565, 440),
             StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false, MinimizeBox = false };
         var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown,
             WrapContents = false, Padding = new Padding(12) };
-        var lan = new RadioButton { Text = "LAN Private/Domain (IPP và tự tìm máy in)", AutoSize = true, Checked = true };
-        var single = new RadioButton { Text = "Public – cho phép một máy khách in bằng địa chỉ IPP", AutoSize = true };
-        var host = new TextBox { Width = 200, Text = NetworkHelper.GetLocalIPv4Address(), Enabled = false };
-        var client = new TextBox { Width = 200, PlaceholderText = "IPv4 máy khách", Enabled = false };
-        var apply = new Button { Text = "Áp dụng", AutoSize = true };
-        panel.Controls.AddRange([lan, single, new Label { Text = "IPv4 máy chủ", AutoSize = true }, host,
+        var lan = new RadioButton { Text = "LAN Private/Domain (IPP và tự tìm máy in)", AutoSize = true };
+        var single = new RadioButton { Text = "Public – cho phép một máy khách in bằng địa chỉ IPP", AutoSize = true, Checked = true };
+        var host = new TextBox { Width = 200, Text = NetworkHelper.GetLocalIPv4Address() };
+        var client = new TextBox { Width = 200, PlaceholderText = "IPv4 máy khách" };
+        var scan = new Button { Text = "Quét máy trong LAN", AutoSize = true };
+        var list = new ListBox { Width = 510, Height = 110 };
+        var status = new Label { Width = 510, Height = 38, Text = "Quét rồi chọn máy khách hoặc nhập IPv4 bên dưới." };
+        using var stop = new CancellationTokenSource();
+        form.FormClosing += (_, _) => stop.Cancel();
+        var apply = new Button { Text = "Chấp nhận", AutoSize = true };
+        panel.Controls.AddRange([lan, single, new Label { Text = "IPv4 máy chủ", AutoSize = true }, host, scan, list, status,
             new Label { Text = "IPv4 máy khách được phép", AutoSize = true }, client, apply]);
         form.Controls.Add(panel);
-        single.CheckedChanged += (_, _) => host.Enabled = client.Enabled = single.Checked;
+        single.CheckedChanged += (_, _) => scan.Enabled = list.Enabled = host.Enabled = client.Enabled = single.Checked;
+        host.TextChanged += (_, _) => { list.Items.Clear(); client.Clear(); };
+        list.SelectedIndexChanged += (_, _) =>
+        {
+            if (list.SelectedItem is LanDiscovery.Device device) client.Text = device.Address.ToString();
+        };
+        scan.Click += async (_, _) =>
+        {
+            if (!ValidAddress(host.Text, out var local)) { status.Text = "IPv4 máy chủ chưa hợp lệ."; return; }
+            scan.Enabled = apply.Enabled = host.Enabled = client.Enabled = lan.Enabled = single.Enabled = false;
+            list.Items.Clear();
+            status.Text = "Đang tìm thiết bị trên LAN…";
+            try
+            {
+                var devices = await LanDiscovery.ScanAsync(local, stop.Token);
+                if (stop.IsCancellationRequested) return;
+                list.Items.AddRange(devices.ToArray());
+                status.Text = $"Tìm thấy {devices.Count} thiết bị. Chọn đúng IPv4 máy khách; có thể nhập tay nếu máy chưa xuất hiện.";
+            }
+            catch (OperationCanceledException) { if (!stop.IsCancellationRequested) status.Text = "Quét hết thời gian. Có thể nhập IP thủ công."; }
+            catch (Exception ex) { if (!stop.IsCancellationRequested) status.Text = ex.Message; }
+            finally { if (!stop.IsCancellationRequested) scan.Enabled = apply.Enabled = host.Enabled = client.Enabled = lan.Enabled = single.Enabled = true; }
+        };
         apply.Click += (_, _) =>
         {
             bool ok;

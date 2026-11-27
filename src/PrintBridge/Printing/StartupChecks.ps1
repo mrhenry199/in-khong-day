@@ -45,19 +45,29 @@ try {
     foreach ($network in @($profiles | Where-Object NetworkCategory -eq 'Public')) {
         $local = @(Get-NetIPAddress -InterfaceIndex $network.InterfaceIndex -AddressFamily IPv4 | Select-Object -ExpandProperty IPAddress)
         $found = $false
-        foreach ($rule in @(Get-NetFirewallRule -Group 'PrintBridge Public IPP' -PolicyStore ActiveStore -ErrorAction SilentlyContinue)) {
+        $policy = Get-NetFirewallProfile -Name Public -PolicyStore ActiveStore -ErrorAction Stop
+        if ($policy.Enabled -eq 'True' -and ($policy.AllowInboundRules -eq 'False' -or $policy.AllowLocalFirewallRules -eq 'False')) {
+            '[!] Chính sách Public chặn quy tắc cục bộ hoặc kết nối vào. Liên hệ quản trị mạng.'
+        }
+        $ruleErrors = @()
+        $rules = @(Get-NetFirewallRule -Name 'PrintBridge.Public.*' -PolicyStore ActiveStore -ErrorAction SilentlyContinue -ErrorVariable ruleErrors)
+        $readFailures = @($ruleErrors | Where-Object { $_.CategoryInfo.Category -ne 'ObjectNotFound' })
+        if ($readFailures.Count) { "[!] Không đọc được quy tắc firewall: $($readFailures[0].Exception.Message)"; continue }
+        foreach ($rule in $rules) {
             if ($rule.Enabled -ne 'True' -or $rule.Action -ne 'Allow' -or $rule.Direction -ne 'Inbound' -or $rule.Profile -ne 'Public') { continue }
             $ports = $rule | Get-NetFirewallPortFilter
             $ips = $rule | Get-NetFirewallAddressFilter
             $app = $rule | Get-NetFirewallApplicationFilter
             $iface = $rule | Get-NetFirewallInterfaceFilter
             if ($ports.Protocol -in @('TCP','6') -and $ports.LocalPort -contains [string]$IppPort -and ([string]$ips.LocalAddress) -in $local -and
-                $app.Program -eq $exe -and $iface.InterfaceAlias -contains $network.InterfaceAlias -and $rule.Name -eq "PrintBridge.Public.$($ips.LocalAddress).$($ips.RemoteAddress)") {
+                [Environment]::ExpandEnvironmentVariables([string]$app.Program) -eq $exe -and $iface.InterfaceAlias -contains $network.InterfaceAlias -and $rule.Name -eq "PrintBridge.Public.$($ips.LocalAddress).$($ips.RemoteAddress)") {
                 "[OK] Public: quy tắc IPP cho $($ips.RemoteAddress) tới $($ips.LocalAddress), TCP/$IppPort."
                 $found = $true
+            } elseif (([string]$ips.LocalAddress) -in $local) {
+                "[!] Quy tắc $($rule.Name) chưa khớp ứng dụng, card mạng hoặc cổng hiện tại. Chấp nhận lại IP sau khi đặt PrintBridge.exe ở thư mục cố định."
             }
         }
-        if (!$found) { "[!] $($network.InterfaceAlias) Public: vào Configure Firewall → Public, nhập IP máy khách để cho phép in bằng IPP." }
+        if (!$found) { "[!] $($network.InterfaceAlias) Public: vào Configure Firewall → Public, bấm Quét máy trong LAN, chọn đúng IP và bấm Chấp nhận." }
     }
     if (!$profiles.Count) { '[!] Chưa tìm thấy kết nối LAN.' }
     if (!$trusted.Count) { return }
