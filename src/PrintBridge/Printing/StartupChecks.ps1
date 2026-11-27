@@ -12,16 +12,20 @@ try {
     foreach ($name in $selected) {
         if ($name -notin $printers.Name) { "[!] $name đang được quảng bá nhưng hàng đợi đã mất. Kiểm tra Settings." }
     }
+    $drivers = $null
+    try { $drivers = @(Get-PrinterDriver -ErrorAction Stop | Select-Object -ExpandProperty Name) }
+    catch { "[!] Không đọc được danh sách driver đã đăng ký: $($_.Exception.Message)" }
     foreach ($printer in $printers) {
-        try {
-            $driver = Get-PrinterDriver -Name $printer.DriverName
-            if (!$driver.DriverPath -or !(Test-Path -LiteralPath $driver.DriverPath -PathType Leaf)) {
-                "[!] $($printer.Name): thiếu tệp driver. Cài lại $($printer.DriverName)."
-            } else { "[OK] $($printer.Name): tìm thấy driver $($driver.Name)." }
-            if ($printer.PrinterStatus -notin @('Normal','Printing','Processing','WarmingUp','PowerSave')) {
-                "[!] $($printer.Name): Windows báo $($printer.PrinterStatus). Kiểm tra hàng đợi và kết nối máy in."
+        if ($null -ne $drivers) {
+            if ($printer.DriverName -and $drivers -contains $printer.DriverName) {
+                "[OK] $($printer.Name): Windows đã đăng ký driver $($printer.DriverName)."
+            } else {
+                "[!] $($printer.Name): chưa đối chiếu được driver '$($printer.DriverName)' trong danh sách trên máy chủ. Hãy in trang thử tại Windows."
             }
-        } catch { "[!] $($printer.Name): không xác minh được driver. $($_.Exception.Message)" }
+        }
+        if ($printer.PrinterStatus -notin @('Normal','Printing','Processing','WarmingUp','PowerSave')) {
+            "[!] $($printer.Name): Windows báo $($printer.PrinterStatus). Kiểm tra hàng đợi và kết nối máy in."
+        }
     }
 } catch { "[!] Không đọc được trạng thái in: $($_.Exception.Message)" }
 
@@ -31,8 +35,14 @@ try {
 } catch { "[!] Không đọc được danh sách thiết bị PnP: $($_.Exception.Message)" }
 
 try {
-    $trusted = @(Get-NetConnectionProfile | Where-Object NetworkCategory -in @('Private','DomainAuthenticated'))
-    if (!$trusted.Count) { '[!] Chưa thấy kết nối Private/Domain. Kiểm tra cấu hình mạng LAN đang dùng.' }
+    $profiles = @(Get-NetConnectionProfile -ErrorAction Stop)
+    $trusted = @($profiles | Where-Object NetworkCategory -in @('Private','DomainAuthenticated'))
+    if (!$trusted.Count) {
+        foreach ($network in $profiles) { "[i] $($network.InterfaceAlias): $($network.NetworkCategory)" }
+        '[!] Chưa có mạng Private/Domain. Kiểm tra kết nối; chỉ chọn Private nếu đây là LAN tin cậy.'
+        "[i] Chưa đánh giá quy tắc TCP/$IppPort và UDP/5353 vì chưa có profile LAN phù hợp. Kiểm tra lại sau khi kết nối."
+        return
+    }
     foreach ($network in $trusted) { "[OK] LAN $($network.InterfaceAlias): $($network.NetworkCategory)" }
     foreach ($entry in @(@('TCP',$IppPort,'PrintBridge IPP Server (TCP 631)'),@('UDP',5353,'PrintBridge mDNS Discovery (UDP 5353)'))) {
         $rules = @(Get-NetFirewallRule -PolicyStore ActiveStore -DisplayName $entry[2] -ErrorAction SilentlyContinue |
