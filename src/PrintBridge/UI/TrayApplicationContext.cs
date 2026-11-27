@@ -81,7 +81,26 @@ public sealed class TrayApplicationContext : ApplicationContext
         {
             _settings.Current.SetupCompleted = true;
             _settings.Save();
+            HostIntegration.ApplyAutoStart(_settings.Current.AutoStart);
         }
+    }
+
+    private void Uninstall()
+    {
+        if (MessageBox.Show(
+                "Gỡ PrintBridge khỏi máy này?\n\n" +
+                "• Xóa quy tắc Windows Firewall của PrintBridge (cần quyền quản trị)\n" +
+                "• Xóa danh sách thiết bị được phép in\n" +
+                "• Tắt tự khởi động cùng Windows và xóa cấu hình\n\n" +
+                "Máy in, driver và hàng đợi Windows không bị thay đổi. Sau khi gỡ, ứng dụng sẽ thoát; bạn có thể xóa PrintBridge.exe.",
+                "Gỡ PrintBridge", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return;
+
+        var ok = HostIntegration.Uninstall(_settings);
+        if (!ok)
+            MessageBox.Show("Chưa gỡ được quy tắc firewall (UAC bị từ chối?). Cấu hình đã xóa; chạy PrintBridge.exe --uninstall để thử lại.",
+                "Gỡ PrintBridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        ExitApplication();
     }
 
     private bool _checking;
@@ -125,7 +144,12 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         BuildContextMenu();
         if (!_settings.Current.SetupCompleted) ShowFirstRun();
-        else await CheckSetupAsync(false);
+        else
+        {
+            // Keep the Run entry pointing at this exe if the user moved it.
+            HostIntegration.ApplyAutoStart(_settings.Current.AutoStart);
+            await CheckSetupAsync(false);
+        }
     }
 
     private void BuildContextMenu()
@@ -184,7 +208,8 @@ public sealed class TrayApplicationContext : ApplicationContext
 
         _contextMenu.Items.Add(new ToolStripSeparator());
 
-        // 4. Exit
+        // 4. Uninstall / Exit
+        AddMenuItem("Gỡ PrintBridge khỏi máy này...", AppIcons.Delete, Uninstall);
         AddMenuItem("Exit", AppIcons.Cancel, ExitApplication, UiTheme.Danger);
     }
 
@@ -221,7 +246,7 @@ public sealed class TrayApplicationContext : ApplicationContext
                 {
                     WindowsPrinterName = name,
                     DisplayName = name,
-                    Enabled = true,
+                    Enabled = WindowsPrinterBridge.IsShareableQueue(name),
                     Color = true,
                     Duplex = false
                 });

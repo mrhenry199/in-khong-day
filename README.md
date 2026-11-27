@@ -27,18 +27,45 @@ Add-Printer -IppURL "ipp://192.168.1.20:631/printers/Canon_LBP2900"
 
 Nếu không thấy máy in, kiểm tra host đang thức, cảnh báo trong khay hệ thống, firewall, và Wi-Fi khách có cô lập thiết bị không. Máy in xuất hiện nhưng gửi lệnh lỗi có thể liên quan đến định dạng mà hệ điều hành gửi.
 
+### Điện thoại thấy máy in nhưng báo "Ngoại tuyến"
+
+Điện thoại tìm máy in qua Bonjour (UDP 5353) nhưng in qua IPP (TCP 631). Thấy mà không in được nghĩa là TCP 631 không tới được PrintBridge. Mở **Kiểm tra máy in và mạng LAN** trong khay và xử lý theo các dòng `[!]`:
+
+1. **Firewall đang CHẶN PrintBridge**: xảy ra khi bấm *Cancel* ở hộp thoại Windows Security Alert lần đầu chạy. Vào Configure Firewall → *Cho phép in* (Public) hoặc *Chia sẻ cả LAN* (Private); PrintBridge xóa quy tắc chặn của chính nó.
+2. **Yêu cầu in từ IP … bị chặn**: danh sách thiết bị được phép đang bật mà IP điện thoại chưa có. Chọn IP đánh dấu *Vừa gửi lệnh in và bị chặn* → *Cho phép in*.
+3. **IP thay đổi**: đặt DHCP reservation cho máy chủ và điện thoại trên router. Trên iPhone, đặt *Cài đặt → Wi-Fi → ⓘ → Địa chỉ Wi-Fi riêng tư* = *Cố định* (hoặc Tắt) cho mạng này; chế độ *Xoay vòng* làm IP đổi và mất quyền in. Khi IP máy chủ đổi, PrintBridge tự quảng bá lại địa chỉ mới sau vài giây.
+4. Máy in Windows tạm dừng, hết giấy, kẹt giấy hoặc mất kết nối USB giờ được báo đúng trạng thái trên điện thoại.
+
+### Bản in giống khi in tại máy chủ
+
+PDF và AirPrint raster được đặt đúng kích thước thật lên khổ giấy (như *Actual size* / *Shrink oversized pages*), không thêm lề 1 inch. Khổ giấy lấy theo lựa chọn của máy khách, nếu không có thì theo kích thước trang tài liệu; trang ngang tự xoay giấy. PDF được dựng ở 300 DPI (600 DPI khi chọn chất lượng cao). Ảnh JPEG từ điện thoại được xoay theo EXIF và vừa vùng in. Nếu driver không có khổ giấy tương ứng, dùng khổ mặc định của hàng đợi và thu nhỏ cho vừa.
+
+## Gỡ cài đặt
+
+Chọn **Gỡ PrintBridge khỏi máy này...** trong menu khay, hoặc chạy `PrintBridge.exe --uninstall`. Thao tác xóa:
+
+- quy tắc Windows Firewall do PrintBridge tạo, cùng quy tắc cho/chặn Windows tự tạo cho PrintBridge.exe (cần UAC);
+- danh sách thiết bị được phép tại `HKLM\SOFTWARE\PrintBridge`;
+- mục tự khởi động `HKCU\...\Run\PrintBridge`;
+- cấu hình `%ProgramData%\PrintBridge` và thư viện giải nén `%TEMP%\.net\PrintBridge`.
+
+Máy in, driver, hàng đợi và cài đặt spooler của Windows không bị thay đổi. Sau đó xóa PrintBridge.exe. Từ mã nguồn có thể dùng `scripts\uninstall.bat`. Lịch sử lệnh in chỉ nằm trong RAM (tối đa 200 lệnh, giữ tài liệu của 20 lệnh gần nhất để in lại) và mất khi thoát.
+
 ## Build và kiểm thử
 
 Dùng .NET SDK 8. Chạy các lệnh từ thư mục gốc.
 
 ```powershell
 dotnet run --project tests/Routing
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/PublicFirewall.Tests.ps1
 dotnet publish src/PrintBridge/PrintBridge.csproj -c Release -r win-x64 --self-contained true -o publish
 ```
 
+Nếu máy chỉ có runtime .NET mới hơn 8, đặt `DOTNET_ROLL_FORWARD=Major` khi chạy test. Một số antivirus cách ly `PrintBridge.dll` ngay sau khi biên dịch (nhận nhầm do ứng dụng sửa firewall và mở cổng mạng); thêm thư mục mã nguồn vào danh sách loại trừ nếu build báo thiếu `obj\...\PrintBridge.dll`.
+
 ## Phạm vi đã kiểm tra
 
-Các test định tuyến dùng spooler giả. Chưa đo độ trễ A/B và chưa chạy ma trận iPhone, Android, macOS, Windows với máy in USB thực tế. Bridge có đường xử lý PDF, ảnh và URF. PWG Raster còn thiếu. Khả năng tương thích IPP Everywhere/Mopria chưa được xác minh. Lịch sử lệnh in hiện giữ tài liệu trong RAM để in lại. Dùng trên LAN tin cậy vì IPP hiện chưa xác thực và chưa bật TLS.
+Các test định tuyến dùng spooler giả. Chưa đo độ trễ A/B và chưa chạy ma trận iPhone, Android, macOS, Windows với máy in USB thực tế. Bridge có đường xử lý PDF, ảnh và URF. PWG Raster còn thiếu. Khả năng tương thích IPP Everywhere/Mopria chưa được xác minh. Dùng trên LAN tin cậy vì IPP hiện chưa xác thực và chưa bật TLS. Khi mới chạy, chỉ máy in vật lý được bật chia sẻ; Microsoft Print to PDF, XPS, OneNote, Fax không được quảng bá trừ khi bật thủ công.
 
 Trên Windows, thử lần lượt spooler dừng, hàng đợi đã xóa, quy tắc firewall thiếu, cổng IPP bận, máy in offline và máy hoạt động bình thường. Kiểm tra cả khi chạy tool bằng tài khoản thường. Đo thời điểm mở hộp thoại, nhận lệnh và ra tờ đầu.
 

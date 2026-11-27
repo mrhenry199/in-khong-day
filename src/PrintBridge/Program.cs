@@ -1,4 +1,5 @@
 using PrintBridge.Printing;
+using PrintBridge.Settings;
 using PrintBridge.UI;
 
 namespace PrintBridge;
@@ -21,6 +22,16 @@ static class Program
                 FirewallHelper.RemoveFirewallRules();
                 return;
             }
+            if (args.Contains("--uninstall", StringComparer.OrdinalIgnoreCase))
+            {
+                StopOtherInstances();
+                var ok = HostIntegration.Uninstall(new SettingsManager());
+                MessageBox.Show(ok
+                        ? "Đã gỡ PrintBridge khỏi máy: quy tắc firewall, danh sách thiết bị, tự khởi động và cấu hình. Có thể xóa PrintBridge.exe."
+                        : "Đã xóa cấu hình và tự khởi động, nhưng chưa gỡ được quy tắc firewall (cần quyền quản trị). Chạy lại PrintBridge.exe --uninstall.",
+                    "PrintBridge", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+                return;
+            }
         }
 
         // 2. Single Instance Protection
@@ -39,5 +50,18 @@ static class Program
 
         // 4. Run System Tray Context
         Application.Run(new TrayApplicationContext());
+    }
+
+    private static void StopOtherInstances()
+    {
+        var self = Environment.ProcessId;
+        foreach (var process in System.Diagnostics.Process.GetProcessesByName("PrintBridge"))
+        {
+            using (process)
+            {
+                if (process.Id == self) continue;
+                try { process.Kill(); process.WaitForExit(5000); } catch { }
+            }
+        }
     }
 }

@@ -1,4 +1,3 @@
-using Microsoft.Win32;
 using PrintBridge.Models;
 using PrintBridge.Network;
 using PrintBridge.Printing;
@@ -314,7 +313,7 @@ public sealed class SettingsForm : Form
                 {
                     WindowsPrinterName = name,
                     DisplayName = name,
-                    Enabled = true,
+                    Enabled = WindowsPrinterBridge.IsShareableQueue(name),
                     Color = true,
                     Duplex = false
                 });
@@ -393,7 +392,7 @@ public sealed class SettingsForm : Form
         _settings.Save();
 
         // Update Windows startup registry key
-        UpdateAutoStartRegistry(_autoStartCheck.Checked);
+        HostIntegration.ApplyAutoStart(_autoStartCheck.Checked);
 
         // Refresh mDNS advertisement
         _server.RefreshAdvertisement();
@@ -406,27 +405,5 @@ public sealed class SettingsForm : Form
         }
 
         Close();
-    }
-
-    private static void UpdateAutoStartRegistry(bool enable)
-    {
-        try
-        {
-            const string runKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run";
-            using var key = Registry.CurrentUser.OpenSubKey(runKey, true);
-            if (enable)
-            {
-                var exePath = Application.ExecutablePath;
-                key?.SetValue("PrintBridge", $"\"{exePath}\"");
-            }
-            else
-            {
-                key?.DeleteValue("PrintBridge", false);
-            }
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Failed to update registry: {ex.Message}");
-        }
     }
 }

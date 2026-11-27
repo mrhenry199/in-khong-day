@@ -1,7 +1,7 @@
 @echo off
 setlocal
 echo ========================================================
-echo   PrintBridge - Cleanup & Uninstallation
+echo   PrintBridge - Cleanup ^& Uninstallation
 echo ========================================================
 echo.
 
@@ -13,19 +13,25 @@ if %ERRORLEVEL% neq 0 (
     exit /b
 )
 
-echo [1/3] Closing running PrintBridge instances...
+echo [1/4] Closing running PrintBridge instances...
 taskkill /F /IM PrintBridge.exe >nul 2>&1
 
-echo [2/3] Removing Windows Firewall rules...
-powershell -NoProfile -File "%~dp0setup-firewall.ps1" -Remove
+echo [2/4] Removing Windows Firewall rules and approved device list...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-firewall.ps1" -Remove
 
-echo [3/3] Removing Windows Startup entry...
+echo [3/4] Removing Windows Startup entry...
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "PrintBridge" /f >nul 2>&1
+
+echo [4/4] Removing settings and unpacked runtime files...
+if exist "%ProgramData%\PrintBridge" rmdir /s /q "%ProgramData%\PrintBridge"
+if exist "%TEMP%\.net\PrintBridge" rmdir /s /q "%TEMP%\.net\PrintBridge"
 
 echo.
 echo ========================================================
 echo   PrintBridge has been cleaned up!
-echo   Settings and firewall rules have been removed.
+echo   Firewall rules, approved devices, startup entry and
+echo   settings were removed. Printers and drivers are untouched.
+echo   You can now delete PrintBridge.exe.
 echo ========================================================
 echo.
 pause

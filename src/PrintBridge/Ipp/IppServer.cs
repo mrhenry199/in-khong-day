@@ -46,6 +46,7 @@ public sealed class IppRequestHandler
             State = PrintJobState.Processing
         };
         _jobs[jobId] = job;
+        TrimHistory();
         JobReceived?.Invoke(job);
 
         var result = _printerBridge.SendToSpooler(targetQueue, data, docName, mimeType, options);
@@ -92,7 +93,7 @@ public sealed class IppRequestHandler
                 IppEncoding.OpCancelJob => HandleCancelJob(req, resolvedName),
                 IppEncoding.OpCreateJob => HandleCreateJob(req, resolvedName, printerUri),
                 IppEncoding.OpSendDocument => HandleSendDocument(req, resolvedName, printerUri, fromNetwork),
-                _ => BuildErrorResponse(req, IppEncoding.StatusServerError, "Operation not supported")
+                _ => BuildErrorResponse(req, IppEncoding.StatusOperationNotSupported, "Operation not supported")
             };
         }
         catch (Exception ex)
@@ -269,7 +270,7 @@ public sealed class IppRequestHandler
     {
         var docName = req.GetOperationAttribute("job-name") ?? "Mobile Print Document";
         var mimeType = req.GetOperationAttribute("document-format") ?? "application/pdf";
-        var options = ParsePrintOptions(req);
+        var options = ParsePrintOptions(req, FindPrinter(printerName)?.Duplex ?? false);
 
         if (req.DocumentData == null || req.DocumentData.Length == 0)
             return BuildErrorResponse(req, IppEncoding.StatusClientBadRequest, "No document data provided.");
@@ -286,6 +287,7 @@ public sealed class IppRequestHandler
         };
 
         _jobs[jobId] = job;
+        TrimHistory();
 
         job.FromNetwork = fromNetwork;
         JobReceived?.Invoke(job);
@@ -402,6 +404,7 @@ public sealed class IppRequestHandler
             State = PrintJobState.Pending
         };
         _jobs[jobId] = job;
+        TrimHistory();
 
         var jobUri = $"{printerUri}/jobs/{jobId}";
 
@@ -427,7 +430,7 @@ public sealed class IppRequestHandler
             return BuildErrorResponse(req, IppEncoding.StatusClientNotFound, "Job not found.");
 
         var mimeType = req.GetOperationAttribute("document-format") ?? job.MimeType;
-        var options = ParsePrintOptions(req);
+        var options = ParsePrintOptions(req, FindPrinter(printerName)?.Duplex ?? false);
         var isLastDocument = req.GetOperationBool("last-document") ?? true;
 
         if (!isLastDocument)
@@ -521,7 +524,26 @@ public sealed class IppRequestHandler
         return 0;
     }
 
-    private static PrintOptions ParsePrintOptions(IppRequest req)
+    private const int MaxJobs = 200;
+    private const int MaxJobsWithDocument = 20;
+
+    /// <summary>
+    /// Bounds the in-memory history so a long-running host does not keep every
+    /// printed document in RAM. Older finished jobs keep only their metadata.
+    /// </summary>
+    private void TrimHistory()
+    {
+        var finished = _jobs.Values
+            .Where(j => j.State is not (PrintJobState.Pending or PrintJobState.Processing))
+            .OrderByDescending(j => j.JobId)
+            .ToList();
+        foreach (var old in finished.Skip(MaxJobsWithDocument))
+            old.DocumentData = Array.Empty<byte>();
+        foreach (var old in finished.Skip(MaxJobs))
+            _jobs.TryRemove(old.JobId, out _);
+    }
+
+    private static PrintOptions ParsePrintOptions(IppRequest req, bool duplexDefault)
     {
         var options = new PrintOptions();
 
@@ -529,9 +551,12 @@ public sealed class IppRequestHandler
         if (copies is > 0)
             options.Copies = Math.Clamp(copies.Value, 1, 99);
 
+        // Without "sides" the client accepted sides-default, which follows the printer's duplex setting.
         var sides = req.GetOperationAttribute("sides");
-        options.Duplex = !string.IsNullOrWhiteSpace(sides)
-                         && sides.StartsWith("two-sided", StringComparison.OrdinalIgnoreCase);
+        options.Duplex = string.IsNullOrWhiteSpace(sides)
+            ? duplexDefault
+            : sides.StartsWith("two-sided", StringComparison.OrdinalIgnoreCase);
+        options.DuplexShortEdge = string.Equals(sides, "two-sided-short-edge", StringComparison.OrdinalIgnoreCase);
 
         var colorMode = req.GetOperationAttribute("print-color-mode");
         if (!string.IsNullOrWhiteSpace(colorMode))

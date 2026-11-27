@@ -59,7 +59,9 @@ internal static class FirewallSetup
             {
                 string permission = allowed == null ? (previous.Contains(ip) ? "Đã có quy tắc cho phép" : "Theo firewall hiện tại") :
                     allowed.Contains(ip) ? "Được phép in" : "Chưa được phép in";
-                list.Items.Add($"{ip}    {permission}    {seen.GetValueOrDefault(ip)}");
+                var note = seen.GetValueOrDefault(ip) is { Length: > 0 } mac ? mac
+                    : denied.Contains(ip) ? "Vừa gửi lệnh in và bị chặn" : "";
+                list.Items.Add($"{ip}    {permission}    {note}");
             }
         }
 

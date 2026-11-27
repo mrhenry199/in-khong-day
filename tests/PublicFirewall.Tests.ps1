@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 $global:MockBridgeRules = @{}
 $script:created = 0
 $script:updated = 0

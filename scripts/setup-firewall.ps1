@@ -4,6 +4,19 @@ param([ValidateRange(1,65535)][int]$IppPort = 631, [switch]$Remove,
 $ErrorActionPreference = 'Stop'
 $group = 'PrintBridge Public IPP'
 $policyKey = 'HKLM:\SOFTWARE\PrintBridge\ClientAccess'
+$appPath = if ($AppBase64) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($AppBase64)) }
+function Get-AppRules {
+    if ($appPath) {
+        Get-NetFirewallApplicationFilter -Program $appPath -ErrorAction SilentlyContinue |
+            Get-NetFirewallRule -ErrorAction SilentlyContinue
+    }
+}
+# Dismissing the "Windows Security Alert" prompt creates inbound block rules for the exe.
+# Block wins over every allow rule, so phones see the printer via Bonjour but cannot connect.
+function Remove-AppBlockRules {
+    Get-AppRules | Where-Object { $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } |
+        Remove-NetFirewallRule -ErrorAction SilentlyContinue
+}
 if ($ClientIPv4 -or $DiscoveryOnly) {
     $address = Get-NetIPAddress -AddressFamily IPv4 -IPAddress $LocalIPv4.IPAddressToString -ErrorAction Stop
     $profile = Get-NetConnectionProfile -InterfaceIndex $address.InterfaceIndex
@@ -12,7 +25,8 @@ if ($ClientIPv4 -or $DiscoveryOnly) {
     if ($policy.Enabled -eq 'True' -and ($policy.AllowInboundRules -eq 'False' -or $policy.AllowLocalFirewallRules -eq 'False')) {
         throw 'Windows policy disables local inbound rules.'
     }
-    $exe = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($AppBase64))
+    $exe = $appPath
+    Remove-AppBlockRules
     $mdnsName = "PrintBridge.Public.mDNS.$($LocalIPv4.IPAddressToString)"
     if ($EnableMdns) {
         $mdnsParams = @{Profile=$category; Direction='Inbound'; Action='Allow'; Protocol='UDP'; LocalPort=5353;
@@ -54,7 +68,11 @@ if ($ClientIPv4 -or $DiscoveryOnly) {
     New-ItemProperty -Path $policyKey -Name Allowed -Value ([string[]]$allowed) -PropertyType MultiString -Force | Out-Null
     return
 }
-if ($Remove) { Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule }
+if ($Remove) {
+    Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    # Also the allow/block rules Windows created for this exe from its firewall prompt.
+    Get-AppRules | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+} else { Remove-AppBlockRules }
 $ipp = 'PrintBridge IPP Server (TCP 631)'
 $mdns = 'PrintBridge mDNS Discovery (UDP 5353)'
 foreach ($name in @($ipp,$mdns,'PrintBridge Application','PrintBridge mDNS (UDP 5353)')) {
@@ -69,6 +87,9 @@ if (!$Remove) {
     New-NetFirewallRule @common -DisplayName $mdns -Protocol UDP -LocalPort 5353 | Out-Null
 }
 
-if (($ShareAll -or $Remove) -and (Get-ItemProperty -Path $policyKey -Name Allowed -ErrorAction SilentlyContinue)) {
+if ($Remove) {
+    # Approved and known device lists live only here.
+    Remove-Item -LiteralPath 'HKLM:\SOFTWARE\PrintBridge' -Recurse -Force -ErrorAction SilentlyContinue
+} elseif ($ShareAll -and (Get-ItemProperty -Path $policyKey -Name Allowed -ErrorAction SilentlyContinue)) {
     Remove-ItemProperty -Path $policyKey -Name Allowed -ErrorAction Stop
 }

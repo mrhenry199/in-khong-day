@@ -58,6 +58,45 @@ var mediaKwJob = new IppResponseBuilder(2, 0, IppEncoding.OpPrintJob, 1).BeginOp
 handler.HandleRequest([..mediaKwJob, 1], "B");
 Check(spool.LastOptions is { MediaWidthHundredthsMm: 21000, MediaHeightHundredthsMm: 29700 },
     "media keyword applied");
+var sidesJob = new IppResponseBuilder(2, 0, IppEncoding.OpPrintJob, 1).BeginOperationAttributes()
+    .AddKeyword("sides", "two-sided-short-edge").Build();
+handler.HandleRequest([..sidesJob, 1], "B");
+Check(spool.LastOptions is { Duplex: true, DuplexShortEdge: true }, "short-edge duplex applied");
+var unsupported = new IppResponseBuilder(2, 0, 0x003C, 1).BeginOperationAttributes().Build();
+Check(BinaryPrimitives.ReadUInt16BigEndian(handler.HandleRequest(unsupported, "B").AsSpan(2)) == IppEncoding.StatusOperationNotSupported,
+    "unsupported operation reports operation-not-supported");
+
+for (int i = 0; i < 230; i++)
+    handler.SubmitDirectJob("B", $"bulk {i}", "application/pdf", [1, 2, 3]);
+var history = handler.GetAllJobs();
+Check(history.Count <= 201 && history.Count(j => j.DocumentData.Length > 0) <= 21, "job history bounded in memory");
+
+// URF: 2x2 sRGB page. Row 0: red pixel then 0x80 (rest of line white).
+// Row 1: two literal pixels blue, green.
+byte[] urf =
+[
+    (byte)'U', (byte)'N', (byte)'I', (byte)'R', (byte)'A', (byte)'S', (byte)'T', 0, 0, 0, 0, 1,
+    24, 1, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 1, 44, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0x00, 255, 0, 0, 0x80,
+    0, 0xFF, 0, 0, 255, 0, 255, 0
+];
+var urfReader = new UrfReader(urf);
+var urfHeader = urfReader.PeekHeader();
+var urfRows = new List<byte[]>();
+var urfOk = urfReader.ReadPage((_, row) => urfRows.Add(row.ToArray()));
+Check(urfHeader is { Width: 2, Height: 2, Dpi: 300 } && urfOk && urfReader.PeekHeader() == null, "URF header and page bounds");
+Check(urfRows[0].SequenceEqual(new byte[] { 0, 0, 255, 255, 255, 255 }), "URF 0x80 blanks rest of line without consuming a pixel");
+Check(urfRows[1].SequenceEqual(new byte[] { 255, 0, 0, 0, 255, 0 }), "URF RGB delivered as BGR for GDI+");
+
+var profile = PrintBridge.Discovery.AirPrintAdvertiser.CreateProfile(
+    new PrinterConfig { WindowsPrinterName = "Canon LBP 2900", DisplayName = "Máy in Canon" }, 631,
+    [System.Net.IPAddress.Parse("192.0.2.22")]);
+var srv = profile.Resources.OfType<Makaretu.Dns.SRVRecord>().Single();
+var host = srv.Target.ToString();
+Check(host.EndsWith(".local") && host.TrimEnd('.').All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.')
+    && profile.Resources.OfType<Makaretu.Dns.AddressRecord>().All(a => a.Name.Equals(srv.Target)),
+    "Bonjour SRV host name is DNS-safe and matches A records");
+
 var local = System.Net.IPAddress.Parse("192.0.2.22");
 var neighbors = PrintBridge.Network.LanDiscovery.ProbeAddresses(local, 30).Select(ip => ip.ToString()).ToArray();
 Check(neighbors.SequenceEqual(new[] { "192.0.2.21" }), "LAN probe stays in subnet and excludes self and broadcast");

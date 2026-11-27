@@ -1,4 +1,4 @@
-param([int]$IppPort, [string]$SelectedQueues, [int]$BridgePid)
+﻿param([int]$IppPort, [string]$SelectedQueues, [int]$BridgePid)
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
@@ -42,6 +42,12 @@ try {
     if ($listen.Count) { "[OK] PrintBridge đang lắng nghe TCP/$IppPort." }
     else { "[!] Chưa xác minh được PrintBridge lắng nghe TCP/$IppPort. Kiểm tra lỗi khởi động hoặc cổng bị chiếm." }
     $exe = (Get-Process -Id $BridgePid).Path
+    $blocked = @(Get-NetFirewallApplicationFilter -Program $exe -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+        Get-NetFirewallRule -ErrorAction SilentlyContinue |
+        Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' })
+    foreach ($rule in $blocked) {
+        "[!] Windows Firewall đang CHẶN PrintBridge (quy tắc '$($rule.DisplayName)', $($rule.Profile)). Điện thoại thấy máy in nhưng báo ngoại tuyến. Vào Configure Firewall → Cho phép in hoặc Chia sẻ cả LAN để gỡ chặn."
+    }
     foreach ($network in @($profiles | Where-Object NetworkCategory -eq 'Public')) {
         $local = @(Get-NetIPAddress -InterfaceIndex $network.InterfaceIndex -AddressFamily IPv4 | Select-Object -ExpandProperty IPAddress)
         $found = $false

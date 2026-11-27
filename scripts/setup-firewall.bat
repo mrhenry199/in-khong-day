@@ -1,3 +1,3 @@
 @echo off
-powershell.exe -NoProfile -File "%~dp0setup-firewall.ps1" %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup-firewall.ps1" %*
 exit /b %errorlevel%

@@ -6,7 +6,12 @@ namespace PrintBridge.Printing;
 public static class FirewallHelper
 {
     public static bool AddFirewallRules(int ippPort = 631, bool shareAll = false) =>
-        ippPort is >= 1 and <= 65535 && Run("-IppPort " + ippPort + (shareAll ? " -ShareAll" : ""));
+        ippPort is >= 1 and <= 65535 && Run("-IppPort " + ippPort + AppArgument + (shareAll ? " -ShareAll" : ""));
+
+    // Lets the script clear Windows' own block rules for this exe and remove its rules on uninstall.
+    private static string AppArgument => Environment.ProcessPath is { } path
+        ? $" -AppBase64 '{Convert.ToBase64String(Encoding.UTF8.GetBytes(path))}'"
+        : "";
 
     internal static bool AllowClient(int port, System.Net.IPAddress local, System.Net.IPAddress remote, bool enableMdns, bool revoke = false)
     {
@@ -21,7 +26,7 @@ public static class FirewallHelper
         return Run($"-IppPort {port} -LocalIPv4 '{local}' -AppBase64 '{exe}' -DiscoveryOnly -EnableMdns");
     }
 
-    public static void RemoveFirewallRules() => Run("-Remove");
+    public static bool RemoveFirewallRules() => Run("-Remove" + AppArgument);
 
     private static bool Run(string arguments)
     {

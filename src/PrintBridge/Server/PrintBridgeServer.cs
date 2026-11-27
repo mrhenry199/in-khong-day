@@ -7,6 +7,7 @@ using PrintBridge.Ipp;
 using PrintBridge.Models;
 using PrintBridge.Printing;
 using PrintBridge.Settings;
+using System.Net.NetworkInformation;
 
 namespace PrintBridge.Server;
 
@@ -45,7 +46,10 @@ public sealed class PrintBridgeServer : IDisposable
         _ippHandler = new IppRequestHandler(_settings, _printerBridge);
 
         _ippHandler.JobReceived += job => JobReceived?.Invoke(job);
+        _networkDebounce = new System.Threading.Timer(_ => RefreshAdvertisement(), null, Timeout.Infinite, Timeout.Infinite);
     }
+
+    private readonly System.Threading.Timer _networkDebounce;
 
     /// <summary>
     /// Starts the IPP HTTP listener and the mDNS service advertiser.
@@ -76,6 +80,8 @@ public sealed class PrintBridgeServer : IDisposable
             builder.WebHost.ConfigureKestrel(options =>
             {
                 options.ListenAnyIP(port);
+                // Kestrel's 30 MB default rejects multi-page photo PDFs and AirPrint raster jobs.
+                options.Limits.MaxRequestBodySize = 256L * 1024 * 1024;
             });
 
             builder.Services.AddSingleton(_settings);
@@ -119,7 +125,14 @@ public sealed class PrintBridgeServer : IDisposable
             LastError = $"Failed to start AirPrint discovery: {ex.Message}";
             System.Diagnostics.Debug.WriteLine(LastError);
         }
+
+        // Advertised A records are fixed at start; re-announce when DHCP, Wi-Fi roaming
+        // or resume from sleep changes the host address, otherwise phones keep the stale IP.
+        NetworkChange.NetworkAddressChanged += OnNetworkAddressChanged;
     }
+
+    private void OnNetworkAddressChanged(object? sender, EventArgs e) =>
+        _networkDebounce.Change(TimeSpan.FromSeconds(3), Timeout.InfiniteTimeSpan);
 
     /// <summary>
     /// Updates the mDNS advertisement immediately when settings or printer toggles change.
@@ -153,7 +166,7 @@ public sealed class PrintBridgeServer : IDisposable
                 {
                     WindowsPrinterName = name,
                     DisplayName = name,
-                    Enabled = true,
+                    Enabled = WindowsPrinterBridge.IsShareableQueue(name),
                     Color = true,
                     Duplex = false
                 });
@@ -172,6 +185,8 @@ public sealed class PrintBridgeServer : IDisposable
             _boundPort = 0;
         }
 
+        NetworkChange.NetworkAddressChanged -= OnNetworkAddressChanged;
+        _networkDebounce.Change(Timeout.Infinite, Timeout.Infinite);
         _advertiser.Stop();
 
         if (_webApp != null)
@@ -193,6 +208,7 @@ public sealed class PrintBridgeServer : IDisposable
     public void Dispose()
     {
         _ = StopAsync();
+        _networkDebounce.Dispose();
         _advertiser.Dispose();
     }
 }

@@ -48,6 +48,7 @@ public static class IppEncoding
     public const ushort StatusClientBadRequest = 0x0400;
     public const ushort StatusClientNotFound   = 0x0406;
     public const ushort StatusServerError      = 0x0500;
+    public const ushort StatusOperationNotSupported = 0x0501;
 }
 
 public readonly struct IppValue

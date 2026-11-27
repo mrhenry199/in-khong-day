@@ -1,10 +1,10 @@
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Printing;
 using System.Runtime.InteropServices;
 using System.Text;
 using Windows.Data.Pdf;
-using Windows.Storage;
 using Windows.Storage.Streams;
 
 namespace PrintBridge.Printing;
@@ -24,6 +24,16 @@ public sealed class WindowsPrinterBridge
         }
 
         return list;
+    }
+
+    /// <summary>
+    /// True for queues that print to a physical device without user interaction
+    /// (excludes Print to PDF, XPS, OneNote, Fax and similar virtual printers).
+    /// </summary>
+    public static bool IsShareableQueue(string printerName)
+    {
+        try { return HasUnattendedPort(printerName); }
+        catch { return false; }
     }
 
     public PrintResult SendToSpooler(
@@ -54,7 +64,7 @@ public sealed class WindowsPrinterBridge
                     : PrintResult.Fail("The PDF could not be rendered. Make sure the printer is online and its driver is working.");
             }
 
-            if (IsUrf(data) || mime.Contains("urf"))
+            if (UrfReader.IsUrf(data) || mime.Contains("urf"))
             {
                 return PrintUrfNative(printerName, data, documentName, options)
                     ? PrintResult.Ok()
@@ -164,15 +174,21 @@ public sealed class WindowsPrinterBridge
 
     private static bool PrintPdfNative(string printerName, byte[] data, string documentName, PrintOptions? options)
     {
-        var tempFile = Path.Combine(Path.GetTempPath(), $"pb_{Guid.NewGuid():N}.pdf");
         try
         {
-            File.WriteAllBytes(tempFile, data);
-
             return Task.Run(async () =>
             {
-                var storageFile = await StorageFile.GetFileFromPathAsync(Path.GetFullPath(tempFile));
-                var pdfDoc = await PdfDocument.LoadFromFileAsync(storageFile);
+                // Load from memory so no copy of the document is left in %TEMP%.
+                using var source = new InMemoryRandomAccessStream();
+                using (var writer = new DataWriter(source.GetOutputStreamAt(0)))
+                {
+                    writer.WriteBytes(data);
+                    await writer.StoreAsync();
+                    await writer.FlushAsync();
+                    writer.DetachStream();
+                }
+
+                var pdfDoc = await PdfDocument.LoadFromStreamAsync(source);
                 uint pageCount = pdfDoc.PageCount;
                 if (pageCount == 0) return false;
 
@@ -184,9 +200,32 @@ public sealed class WindowsPrinterBridge
                 printDoc.DocumentName = documentName;
                 printDoc.PrintController = new StandardPrintController();
 
+                SizeF PageSize(uint index)
+                {
+                    using var p = pdfDoc.GetPage(index);
+                    return new SizeF((float)(p.Size.Width * 100 / 96), (float)(p.Size.Height * 100 / 96));
+                }
+
                 var pagesPerSheet = NormalizePagesPerSheet(options?.PagesPerSheet ?? 1);
+                if (pagesPerSheet == 1 && options?.MediaWidthHundredthsMm == null)
+                    TrySelectPaper(printDoc, PageSize(0));
                 var (columns, rows) = ConfigureNUp(printDoc, pagesPerSheet);
+                var dpi = options?.Quality == 5 ? 600 : 300;
+                double displayScale;
+                using (var first = pdfDoc.GetPage(0))
+                    displayScale = MeasureRenderScale(first);
                 uint currentPage = 0;
+
+                if (pagesPerSheet == 1)
+                {
+                    // Turn the sheet per page, like a desktop PDF viewer does for mixed documents.
+                    printDoc.QueryPageSettings += (s, e) =>
+                    {
+                        if (currentPage >= pageCount) return;
+                        var size = PageSize(currentPage);
+                        e.PageSettings.Landscape = size.Width > size.Height;
+                    };
+                }
 
                 printDoc.PrintPage += (s, e) =>
                 {
@@ -199,15 +238,12 @@ public sealed class WindowsPrinterBridge
                     for (int cell = 0; cell < pagesPerSheet && currentPage < pageCount; cell++, currentPage++)
                     {
                         using var page = pdfDoc.GetPage(currentPage);
-                        using var stream = new InMemoryRandomAccessStream();
-
-                        page.RenderToStreamAsync(stream).AsTask().GetAwaiter().GetResult();
-                        stream.Seek(0);
-
-                        using var netStream = stream.AsStreamForRead();
-                        using var img = Image.FromStream(netStream);
-
-                        DrawImageInCell(e, img, cell, columns, rows);
+                        var physical = new SizeF((float)(page.Size.Width * 100 / 96), (float)(page.Size.Height * 100 / 96));
+                        RenderPdfPage(page, pagesPerSheet == 1 ? dpi : 200, displayScale, img =>
+                        {
+                            if (pagesPerSheet == 1) DrawPage(e, img, physical);
+                            else DrawImageInCell(e, img, cell, columns, rows);
+                        });
                     }
 
                     e.HasMorePages = currentPage < pageCount;
@@ -222,14 +258,47 @@ public sealed class WindowsPrinterBridge
             System.Diagnostics.Debug.WriteLine($"Native Windows.Data.Pdf print failed: {ex.Message}");
             return false;
         }
-        finally
+    }
+
+    /// <summary>
+    /// Windows.Data.Pdf multiplies the requested size by the display scale (e.g. 1.8 at
+    /// 180 %). Measure it once so print renders have the intended pixel size on every host.
+    /// </summary>
+    private static double MeasureRenderScale(PdfPage page)
+    {
+        try
         {
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(300_000);
-                try { if (File.Exists(tempFile)) File.Delete(tempFile); } catch { }
-            });
+            using var stream = new InMemoryRandomAccessStream();
+            page.RenderToStreamAsync(stream, new PdfPageRenderOptions { DestinationWidth = 100 }).AsTask().GetAwaiter().GetResult();
+            stream.Seek(0);
+            using var netStream = stream.AsStreamForRead();
+            using var img = Image.FromStream(netStream);
+            return Math.Clamp(img.Width / 100.0, 0.5, 4);
         }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    private static void RenderPdfPage(PdfPage page, int dpi, double displayScale, Action<Image> draw)
+    {
+        // Render at print resolution; the default PDF render size is 96 DPI, which prints blurry.
+        const double maxPixels = 36_000_000;
+        double width = page.Size.Width * dpi / 96, height = page.Size.Height * dpi / 96;
+        var shrink = Math.Min(1, Math.Sqrt(maxPixels / Math.Max(1, width * height)));
+        var renderOptions = new PdfPageRenderOptions
+        {
+            DestinationWidth = (uint)Math.Max(1, width * shrink / displayScale),
+            DestinationHeight = (uint)Math.Max(1, height * shrink / displayScale)
+        };
+
+        using var stream = new InMemoryRandomAccessStream();
+        page.RenderToStreamAsync(stream, renderOptions).AsTask().GetAwaiter().GetResult();
+        stream.Seek(0);
+        using var netStream = stream.AsStreamForRead();
+        using var img = Image.FromStream(netStream);
+        draw(img);
     }
 
     private static bool PrintImageNative(string printerName, byte[] data, string documentName, PrintOptions? options)
@@ -257,7 +326,12 @@ public sealed class WindowsPrinterBridge
                 catch { frameCount = 1; }
             }
 
+            if (frameCount == 1)
+                ApplyExifOrientation(img);
+
             var pagesPerSheet = NormalizePagesPerSheet(options?.PagesPerSheet ?? 1);
+            if (pagesPerSheet == 1 && options?.Landscape == null)
+                printDoc.DefaultPageSettings.Landscape = img.Width > img.Height;
             var (columns, rows) = ConfigureNUp(printDoc, pagesPerSheet);
             int frameIndex = 0;
 
@@ -276,7 +350,8 @@ public sealed class WindowsPrinterBridge
                         try { img.SelectActiveFrame(dimension, frameIndex); } catch { }
                     }
 
-                    DrawImageInCell(e, img, cell, columns, rows);
+                    if (pagesPerSheet == 1) DrawPage(e, img, null);
+                    else DrawImageInCell(e, img, cell, columns, rows);
                 }
 
                 e.HasMorePages = frameIndex < frameCount;
@@ -294,11 +369,11 @@ public sealed class WindowsPrinterBridge
 
     private static bool PrintUrfNative(string printerName, byte[] data, string documentName, PrintOptions? options)
     {
-        List<Bitmap>? pages = null;
         try
         {
-            pages = DecodeUrfPages(data);
-            if (pages.Count == 0) return false;
+            if (!UrfReader.IsUrf(data)) return false;
+            var reader = new UrfReader(data);
+            if (reader.PeekHeader() is not { } first) return false;
 
             using var printDoc = new PrintDocument();
             printDoc.PrinterSettings.PrinterName = printerName;
@@ -309,8 +384,19 @@ public sealed class WindowsPrinterBridge
             printDoc.PrintController = new StandardPrintController();
 
             var pagesPerSheet = NormalizePagesPerSheet(options?.PagesPerSheet ?? 1);
+            if (pagesPerSheet == 1 && options?.MediaWidthHundredthsMm == null && UrfPhysicalSize(first) is { } firstSize)
+                TrySelectPaper(printDoc, firstSize);
             var (columns, rows) = ConfigureNUp(printDoc, pagesPerSheet);
-            int pageIndex = 0;
+
+            if (pagesPerSheet == 1)
+            {
+                printDoc.QueryPageSettings += (s, e) =>
+                {
+                    if (reader.PeekHeader() is { } next)
+                        e.PageSettings.Landscape = next.Width > next.Height;
+                };
+            }
+
             printDoc.PrintPage += (s, e) =>
             {
                 if (e.Graphics == null)
@@ -319,12 +405,15 @@ public sealed class WindowsPrinterBridge
                     return;
                 }
 
-                for (int cell = 0; cell < pagesPerSheet && pageIndex < pages.Count; cell++, pageIndex++)
+                // Decode one page at a time; a 600 DPI A4 page alone is ~100 MB of pixels.
+                for (int cell = 0; cell < pagesPerSheet && reader.PeekHeader() is { } header; cell++)
                 {
-                    DrawImageInCell(e, pages[pageIndex], cell, columns, rows);
+                    using var page = DecodeUrfPage(reader, header);
+                    if (pagesPerSheet == 1) DrawPage(e, page, UrfPhysicalSize(header));
+                    else DrawImageInCell(e, page, cell, columns, rows);
                 }
 
-                e.HasMorePages = pageIndex < pages.Count;
+                e.HasMorePages = reader.PeekHeader() != null;
             };
 
             printDoc.Print();
@@ -335,14 +424,28 @@ public sealed class WindowsPrinterBridge
             System.Diagnostics.Debug.WriteLine($"URF print failed: {ex.Message}");
             return false;
         }
+    }
+
+    private static SizeF? UrfPhysicalSize(UrfReader.PageHeader header) =>
+        header.Dpi > 0 ? new SizeF(header.Width * 100f / header.Dpi, header.Height * 100f / header.Dpi) : null;
+
+    private static Bitmap DecodeUrfPage(UrfReader reader, UrfReader.PageHeader header)
+    {
+        var bitmap = new Bitmap(header.Width, header.Height, PixelFormat.Format24bppRgb);
+        using (var g = Graphics.FromImage(bitmap))
+            g.Clear(Color.White);
+
+        var data = bitmap.LockBits(new Rectangle(0, 0, header.Width, header.Height), ImageLockMode.WriteOnly, bitmap.PixelFormat);
+        try
+        {
+            reader.ReadPage((y, bgr) => Marshal.Copy(bgr, 0, IntPtr.Add(data.Scan0, y * data.Stride), bgr.Length));
+        }
         finally
         {
-            if (pages != null)
-            {
-                foreach (var page in pages)
-                    page.Dispose();
-            }
+            bitmap.UnlockBits(data);
         }
+
+        return bitmap;
     }
 
     private static bool PrintTextNative(string printerName, string text, string documentName, PrintOptions? options)
@@ -514,6 +617,85 @@ public sealed class WindowsPrinterBridge
         e.Graphics?.DrawImage(image, x, y, width, height);
     }
 
+    /// <summary>
+    /// Draws one document page on the sheet. When the page's physical size is known
+    /// (PDF, URF) it is placed at actual size on the paper and only shrunk if it is
+    /// larger than the sheet, matching how the host prints a PDF. Images without a
+    /// meaningful size are fitted to the printable area.
+    /// </summary>
+    private static void DrawPage(PrintPageEventArgs e, Image image, SizeF? physicalSize)
+    {
+        var g = e.Graphics;
+        if (g == null) return;
+        g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+
+        RectangleF target;
+        if (physicalSize is { Width: > 0, Height: > 0 } size)
+        {
+            // Graphics origin is the printable-area corner; the sheet starts at minus the hard margins.
+            var sheet = new RectangleF(-e.PageSettings.HardMarginX, -e.PageSettings.HardMarginY,
+                e.PageBounds.Width, e.PageBounds.Height);
+            target = FitRect(sheet, size.Width, size.Height, enlarge: false);
+        }
+        else
+        {
+            target = FitRect(g.VisibleClipBounds, image.Width, image.Height, enlarge: true);
+        }
+
+        g.DrawImage(image, target);
+    }
+
+    private static RectangleF FitRect(RectangleF area, float width, float height, bool enlarge)
+    {
+        var scale = Math.Min(area.Width / width, area.Height / height);
+        if (!enlarge) scale = Math.Min(scale, 1f);
+        float w = width * scale, h = height * scale;
+        return new RectangleF(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
+    }
+
+    /// <summary>
+    /// Selects the printer's paper matching a size in hundredths of an inch (either
+    /// orientation). Leaves the queue default untouched when the driver has no match.
+    /// </summary>
+    private static bool TrySelectPaper(PrintDocument printDoc, SizeF size)
+    {
+        const float tolerance = 8; // ~2 mm
+        var sizes = printDoc.PrinterSettings.PaperSizes.Cast<PaperSize>().Where(p => p.Width > 0 && p.Height > 0).ToList();
+        var match = sizes.FirstOrDefault(p => Math.Abs(p.Width - size.Width) <= tolerance && Math.Abs(p.Height - size.Height) <= tolerance)
+            ?? sizes.FirstOrDefault(p => Math.Abs(p.Width - size.Height) <= tolerance && Math.Abs(p.Height - size.Width) <= tolerance);
+        if (match == null) return false;
+        printDoc.DefaultPageSettings.PaperSize = match;
+        return true;
+    }
+
+    private static void ApplyExifOrientation(Image img)
+    {
+        const int orientationTag = 0x0112;
+        try
+        {
+            if (!img.PropertyIdList.Contains(orientationTag)) return;
+            var value = img.GetPropertyItem(orientationTag)?.Value;
+            if (value is not { Length: >= 2 }) return;
+
+            var flip = BitConverter.ToUInt16(value, 0) switch
+            {
+                2 => RotateFlipType.RotateNoneFlipX,
+                3 => RotateFlipType.Rotate180FlipNone,
+                4 => RotateFlipType.Rotate180FlipX,
+                5 => RotateFlipType.Rotate90FlipX,
+                6 => RotateFlipType.Rotate90FlipNone,
+                7 => RotateFlipType.Rotate270FlipX,
+                8 => RotateFlipType.Rotate270FlipNone,
+                _ => RotateFlipType.RotateNoneFlipNone
+            };
+            if (flip == RotateFlipType.RotateNoneFlipNone) return;
+            img.RotateFlip(flip);
+            img.RemovePropertyItem(orientationTag);
+        }
+        catch { }
+    }
+
     private static void ApplyPrintOptions(PrintDocument printDoc, PrintOptions? options)
     {
         if (options == null) return;
@@ -528,9 +710,23 @@ public sealed class WindowsPrinterBridge
         try
         {
             if (options.Duplex && printDoc.PrinterSettings.CanDuplex)
-                printDoc.PrinterSettings.Duplex = Duplex.Vertical;
+                printDoc.PrinterSettings.Duplex = options.DuplexShortEdge ? Duplex.Horizontal : Duplex.Vertical;
             else if (!options.Duplex)
                 printDoc.PrinterSettings.Duplex = Duplex.Simplex;
+        }
+        catch { }
+
+        try
+        {
+            var kind = options.Quality switch
+            {
+                3 => PrinterResolutionKind.Draft,
+                5 => PrinterResolutionKind.High,
+                _ => (PrinterResolutionKind?)null
+            };
+            if (kind != null && printDoc.PrinterSettings.PrinterResolutions.Cast<PrinterResolution>()
+                    .FirstOrDefault(r => r.Kind == kind) is { } resolution)
+                printDoc.DefaultPageSettings.PrinterResolution = resolution;
         }
         catch { }
 
@@ -543,26 +739,10 @@ public sealed class WindowsPrinterBridge
 
         try
         {
+            // IPP sizes are hundredths of a millimetre; PaperSize uses hundredths of an inch.
             if (options.MediaWidthHundredthsMm is int mediaWidth
                 && options.MediaHeightHundredthsMm is int mediaHeight)
-            {
-                // PaperSize dimensions are in hundredths of an inch.
-                int width = (int)Math.Round(mediaWidth / 25.4);
-                int height = (int)Math.Round(mediaHeight / 25.4);
-
-                PaperSize? match = null;
-                foreach (PaperSize size in printDoc.PrinterSettings.PaperSizes)
-                {
-                    if (Math.Abs(size.Width - width) <= 6 && Math.Abs(size.Height - height) <= 6)
-                    {
-                        match = size;
-                        break;
-                    }
-                }
-
-                printDoc.DefaultPageSettings.PaperSize =
-                    match ?? new PaperSize($"IPP {mediaWidth}x{mediaHeight}", width, height);
-            }
+                TrySelectPaper(printDoc, new SizeF(mediaWidth / 25.4f, mediaHeight / 25.4f));
         }
         catch { }
 
@@ -679,200 +859,10 @@ public sealed class WindowsPrinterBridge
             or ".ico" or ".webp" or ".wmf" or ".emf";
     }
 
-    private static bool IsUrf(byte[] data) =>
-        data.Length >= 8 && data[0] == 'U' && data[1] == 'N' && data[2] == 'I' && data[3] == 'R'
-        && data[4] == 'A' && data[5] == 'S' && data[6] == 'T';
-
     private static bool IsRawPrinterLanguage(string mime, string extension) =>
         mime.Contains("postscript", StringComparison.OrdinalIgnoreCase)
         || mime.Contains("pcl", StringComparison.OrdinalIgnoreCase)
         || extension is ".ps" or ".pcl" or ".prn";
-
-    private static List<Bitmap> DecodeUrfPages(byte[] data)
-    {
-        var list = new List<Bitmap>();
-        if (!IsUrf(data) || data.Length < 12) return list;
-
-        int pageCount = ReadInt32BigEndian(data, 8);
-        int pos = 12;
-        int pageIndex = 0;
-
-        while (pos + 32 <= data.Length
-               && (pageCount <= 0 || pageIndex < pageCount)
-               && pageIndex < 500)
-        {
-            int bpp = data[pos];
-            int width = ReadInt32BigEndian(data, pos + 12);
-            int height = ReadInt32BigEndian(data, pos + 16);
-            pos += 32;
-
-            if (bpp <= 0 || width <= 0 || height <= 0 || width > 20000 || height > 30000)
-                break;
-
-            if ((long)width * height > 80_000_000L)
-                break;
-
-            int bytesPerPixel = bpp switch
-            {
-                1 => 1,
-                8 => 1,
-                24 => 3,
-                32 => 4,
-                _ => Math.Max(1, (bpp + 7) / 8)
-            };
-
-            int bytesPerRow = bpp == 1 ? (width + 7) / 8 : width * bytesPerPixel;
-            var bitmap = new Bitmap(width, height, PixelFormat.Format24bppRgb);
-            var rect = new Rectangle(0, 0, width, height);
-            var bitmapData = bitmap.LockBits(rect, ImageLockMode.WriteOnly, bitmap.PixelFormat);
-
-            try
-            {
-                var line = new byte[bytesPerRow];
-                var outputRow = new byte[width * 3];
-                int y = 0;
-
-                while (y < height)
-                {
-                    if (pos >= data.Length)
-                        break;
-
-                    // Each raster line starts with a repeat count (0 = once).
-                    int lineRepeat = data[pos++] + 1;
-                    int rowPos = 0;
-                    bool truncated = false;
-
-                    while (rowPos < bytesPerRow)
-                    {
-                        if (pos >= data.Length)
-                        {
-                            truncated = true;
-                            break;
-                        }
-
-                        int code = data[pos++];
-
-                        if (code < 0x80)
-                        {
-                            // Repeat the next pixel (code + 1) times.
-                            int repeat = code + 1;
-                            if (pos + bytesPerPixel > data.Length)
-                            {
-                                truncated = true;
-                                break;
-                            }
-
-                            for (int i = 0; i < repeat && rowPos < bytesPerRow; i++)
-                            {
-                                int copy = Math.Min(bytesPerPixel, bytesPerRow - rowPos);
-                                Array.Copy(data, pos, line, rowPos, copy);
-                                rowPos += copy;
-                            }
-
-                            pos += bytesPerPixel;
-                        }
-                        else if (code == 0x80)
-                        {
-                            // Fill the rest of the line with the next pixel.
-                            if (pos + bytesPerPixel > data.Length)
-                            {
-                                truncated = true;
-                                break;
-                            }
-
-                            while (rowPos < bytesPerRow)
-                            {
-                                int copy = Math.Min(bytesPerPixel, bytesPerRow - rowPos);
-                                Array.Copy(data, pos, line, rowPos, copy);
-                                rowPos += copy;
-                            }
-
-                            pos += bytesPerPixel;
-                        }
-                        else
-                        {
-                            // Copy (257 - code) pixels verbatim.
-                            int pixelCount = 257 - code;
-                            int bytesToCopy = Math.Min(pixelCount * bytesPerPixel, bytesPerRow - rowPos);
-                            int available = Math.Min(bytesToCopy, data.Length - pos);
-
-                            Array.Copy(data, pos, line, rowPos, available);
-                            pos += available;
-                            rowPos += available;
-
-                            if (available < bytesToCopy)
-                            {
-                                truncated = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (truncated)
-                        break;
-
-                    int repetitions = Math.Min(lineRepeat, height - y);
-                    for (int r = 0; r < repetitions; r++)
-                    {
-                        ConvertUrfLine(line, outputRow, width, bpp, bytesPerPixel);
-                        IntPtr destination = IntPtr.Add(bitmapData.Scan0, y * bitmapData.Stride);
-                        Marshal.Copy(outputRow, 0, destination, outputRow.Length);
-                        y++;
-                    }
-                }
-            }
-            finally
-            {
-                bitmap.UnlockBits(bitmapData);
-            }
-
-            list.Add(bitmap);
-            pageIndex++;
-        }
-
-        return list;
-    }
-
-    private static void ConvertUrfLine(byte[] line, byte[] outputRow, int width, int bpp, int bytesPerPixel)
-    {
-        if (bpp == 1)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                bool black = (line[x >> 3] & (0x80 >> (x & 7))) != 0;
-                byte value = black ? (byte)0 : (byte)255;
-                int offset = x * 3;
-                outputRow[offset] = value;
-                outputRow[offset + 1] = value;
-                outputRow[offset + 2] = value;
-            }
-        }
-        else if (bytesPerPixel >= 3)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                int source = x * bytesPerPixel;
-                int offset = x * 3;
-                outputRow[offset] = line[source];
-                outputRow[offset + 1] = line[source + 1];
-                outputRow[offset + 2] = line[source + 2];
-            }
-        }
-        else
-        {
-            for (int x = 0; x < width; x++)
-            {
-                byte value = line[x];
-                int offset = x * 3;
-                outputRow[offset] = value;
-                outputRow[offset + 1] = value;
-                outputRow[offset + 2] = value;
-            }
-        }
-    }
-
-    private static int ReadInt32BigEndian(byte[] data, int offset) =>
-        (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
 
     private static bool SendRawBytesToSpooler(string printerName, byte[] data, string docName)
     {
