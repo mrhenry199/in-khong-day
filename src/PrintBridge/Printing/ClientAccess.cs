@@ -5,6 +5,27 @@ namespace PrintBridge.Printing;
 
 internal static class ClientAccess
 {
+    private static readonly object Gate = new();
+    private static readonly List<string> RecentDenied = new();
+
+    internal static string[] Denied()
+    {
+        lock (Gate) return RecentDenied.ToArray();
+    }
+
+    internal static void RecordDenied(IPAddress? remote)
+    {
+        if (remote == null) return;
+        if (remote.IsIPv4MappedToIPv6) remote = remote.MapToIPv4();
+        lock (Gate)
+        {
+            var text = remote.ToString();
+            RecentDenied.Remove(text);
+            RecentDenied.Insert(0, text);
+            if (RecentDenied.Count > 8) RecentDenied.RemoveAt(RecentDenied.Count - 1);
+        }
+    }
+
     internal static string[]? Allowed() =>
         (string[]?)Registry.GetValue(@"HKEY_LOCAL_MACHINE\SOFTWARE\PrintBridge\ClientAccess", "Allowed", null);
 

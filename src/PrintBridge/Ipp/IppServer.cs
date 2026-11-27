@@ -3,6 +3,7 @@ using PrintBridge.Network;
 using PrintBridge.Printing;
 using PrintBridge.Settings;
 using System.Collections.Concurrent;
+using System.Globalization;
 
 namespace PrintBridge.Ipp;
 
@@ -113,6 +114,8 @@ public sealed class IppRequestHandler
         var supportsColor = cfg?.Color ?? true;
         var supportsDuplex = cfg?.Duplex ?? false;
         var location = string.IsNullOrWhiteSpace(cfg?.Location) ? "Local Network" : cfg!.Location;
+        var (printerState, stateReasons, accepting) =
+            DecodeQueueStatus(_printerBridge.GetQueueStatusBits(printerName), queuedJobs);
 
         var rb = new IppResponseBuilder(req.VersionMajor, req.VersionMinor, IppEncoding.StatusOk, req.RequestId);
 
@@ -125,8 +128,7 @@ public sealed class IppRequestHandler
           .AddKeyword("uri-security-supported", "none")
           .AddKeyword("uri-authentication-supported", "none")
           .AddName("printer-name", queueName)
-          .AddEnum("printer-state", 3) // 3 = idle
-          .AddKeyword("printer-state-reasons", "none")
+          .AddEnum("printer-state", printerState)
           .AddKeyword("ipp-versions-supported", "1.1")
             .AddKeywordValue("2.0")
           .AddEnum("operations-supported", IppEncoding.OpPrintJob)
@@ -148,6 +150,15 @@ public sealed class IppRequestHandler
             .AddMimeMediaTypeValue("image/png")
             .AddMimeMediaTypeValue("image/urf")
           .AddUri("printer-uuid", $"urn:uuid:{uuid}");
+
+        if (stateReasons.Count == 0)
+            rb.AddKeyword("printer-state-reasons", "none");
+        else
+        {
+            rb.AddKeyword("printer-state-reasons", stateReasons[0]);
+            foreach (var reason in stateReasons.Skip(1))
+                rb.AddKeywordValue(reason);
+        }
 
         rb.AddKeyword("urf-supported", "W8");
         if (supportsColor)
@@ -186,8 +197,26 @@ public sealed class IppRequestHandler
             .AddKeywordValue("na_legal_8.5x14in")
           .AddKeyword("output-bin-default", "face-down")
           .AddKeyword("output-bin-supported", "face-down")
+          .AddKeyword("media-ready", "iso_a4_210x297mm")
+          .AddKeyword("media-col-supported", "media-size")
+          .AddEnum("orientation-requested-supported", 3)
+            .AddEnumValue(4)
+            .AddEnumValue(5)
+            .AddEnumValue(6)
+          .AddEnum("orientation-requested-default", 3)
+          .AddRangeOfInteger("number-up-supported", 1, 16)
+          .AddInteger("number-up-default", 1)
+          .AddBoolean("page-ranges-supported", false)
+          .AddKeyword("job-creation-attributes-supported", "copies")
+            .AddKeywordValue("sides")
+            .AddKeywordValue("media")
+            .AddKeywordValue("media-col")
+            .AddKeywordValue("number-up")
+            .AddKeywordValue("orientation-requested")
+            .AddKeywordValue("print-color-mode")
+            .AddKeywordValue("print-quality")
           .AddText("printer-device-id", $"MFG:PrintBridge;MDL:{displayName};")
-          .AddBoolean("printer-is-accepting-jobs", true)
+          .AddBoolean("printer-is-accepting-jobs", accepting)
           .AddInteger("queued-job-count", queuedJobs)
           .AddKeyword("pdl-override-supported", "attempted")
           .AddInteger("printer-up-time", (int)(DateTime.UtcNow - _startTime).TotalSeconds)
@@ -207,6 +236,31 @@ public sealed class IppRequestHandler
             .AddIntegerValue(100)
           .AddInteger("marker-low-levels", 10)
             .AddIntegerValue(10);
+
+        rb.AddResolution("printer-resolution-supported", 300, 300)
+          .AddResolutionValue(600, 600);
+        rb.AddResolution("printer-resolution-default", 600, 600);
+
+        rb.BeginCollection("media-col-default")
+            .AddMemberAttrName("media-size")
+            .BeginCollectionValue()
+            .AddMemberAttrName("x-dimension").AddMemberInteger(21000)
+            .AddMemberAttrName("y-dimension").AddMemberInteger(29700)
+            .EndCollection()
+            .EndCollection();
+
+        rb.BeginCollection("media-size-supported")
+            .AddMemberAttrName("x-dimension").AddMemberInteger(21000)
+            .AddMemberAttrName("y-dimension").AddMemberInteger(29700)
+            .EndCollection()
+            .BeginCollectionValue()
+            .AddMemberAttrName("x-dimension").AddMemberInteger(21590)
+            .AddMemberAttrName("y-dimension").AddMemberInteger(27940)
+            .EndCollection()
+            .BeginCollectionValue()
+            .AddMemberAttrName("x-dimension").AddMemberInteger(21590)
+            .AddMemberAttrName("y-dimension").AddMemberInteger(35560)
+            .EndCollection();
 
         return rb.Build();
     }
@@ -488,8 +542,103 @@ public sealed class IppRequestHandler
                 options.Color = true;
         }
 
+        var mediaSize = ParseMediaSize(req);
+        if (mediaSize is { } size)
+        {
+            options.MediaWidthHundredthsMm = size.W;
+            options.MediaHeightHundredthsMm = size.H;
+        }
+
+        var orientation = req.GetOperationInt("orientation-requested");
+        if (orientation.HasValue)
+            options.Landscape = orientation.Value is 4 or 5;
+        else if (req.GetOperationAttribute("orientation-requested") is { } orientationText)
+            options.Landscape = orientationText.Contains("landscape", StringComparison.OrdinalIgnoreCase);
+
+        var numberUp = req.GetOperationInt("number-up");
+        if (numberUp is > 0)
+            options.PagesPerSheet = Math.Clamp(numberUp.Value, 1, 16);
+
         options.Quality = req.GetOperationInt("print-quality");
         return options;
+    }
+
+    private static (int W, int H)? ParseMediaSize(IppRequest req)
+    {
+        var members = req.GetCollectionIntegers("media-col");
+        if (members.TryGetValue("x-dimension", out var x)
+            && members.TryGetValue("y-dimension", out var y)
+            && x > 0 && y > 0)
+        {
+            return (x, y);
+        }
+
+        var media = req.GetOperationAttribute("media");
+        if (!string.IsNullOrWhiteSpace(media))
+            return ParseMediaKeyword(media);
+
+        var sizeMembers = req.GetCollectionIntegers("media-size");
+        if (sizeMembers.TryGetValue("x-dimension", out x)
+            && sizeMembers.TryGetValue("y-dimension", out y)
+            && x > 0 && y > 0)
+        {
+            return (x, y);
+        }
+
+        return null;
+    }
+
+    private static (int W, int H)? ParseMediaKeyword(string media)
+    {
+        var separator = media.LastIndexOf('_');
+        if (separator < 0) return null;
+
+        var size = media[(separator + 1)..];
+        double factor;
+        if (size.EndsWith("mm", StringComparison.OrdinalIgnoreCase)) { factor = 100; size = size[..^2]; }
+        else if (size.EndsWith("in", StringComparison.OrdinalIgnoreCase)) { factor = 2540; size = size[..^2]; }
+        else return null;
+
+        var parts = size.Split('x');
+        if (parts.Length != 2
+            || !double.TryParse(parts[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var w)
+            || !double.TryParse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture, out var h)
+            || w <= 0 || h <= 0)
+        {
+            return null;
+        }
+
+        return ((int)Math.Round(w * factor), (int)Math.Round(h * factor));
+    }
+
+    // PRINTER_INFO_6 status bits (wingdi.h PRINTER_STATUS_*)
+    private static (int State, List<string> Reasons, bool Accepting) DecodeQueueStatus(uint bits, int queuedJobs)
+    {
+        const uint Paused = 0x1, Error = 0x2, PendingDeletion = 0x4, PaperJam = 0x8, PaperOut = 0x10,
+            ManualFeed = 0x20, PaperProblem = 0x40, Offline = 0x80, IoActive = 0x100, Busy = 0x200,
+            Printing = 0x400, NotAvailable = 0x1000, Waiting = 0x2000, Processing = 0x4000,
+            TonerLow = 0x20000, NoToner = 0x40000, UserIntervention = 0x100000,
+            DoorOpen = 0x400000, ServerUnknown = 0x800000;
+
+        var reasons = new List<string>();
+        if ((bits & (Offline | NotAvailable | ServerUnknown | PendingDeletion)) != 0) reasons.Add("offline");
+        if ((bits & PaperJam) != 0) reasons.Add("media-jam");
+        if ((bits & (PaperOut | ManualFeed | PaperProblem)) != 0) reasons.Add("media-needed");
+        if ((bits & DoorOpen) != 0) reasons.Add("cover-open");
+        if ((bits & NoToner) != 0) reasons.Add("toner-empty");
+        else if ((bits & TonerLow) != 0) reasons.Add("toner-low");
+        if ((bits & Paused) != 0) reasons.Add("paused");
+        if ((bits & (Error | UserIntervention)) != 0) reasons.Add("other");
+
+        const uint Stopped = Offline | NotAvailable | ServerUnknown | PendingDeletion
+            | Paused | PaperJam | PaperProblem | DoorOpen | UserIntervention | Error;
+
+        var state = (bits & Stopped) != 0 ? 5
+            : (bits & (Printing | Busy | IoActive | Processing | Waiting)) != 0 || queuedJobs > 0 ? 4
+            : 3;
+
+        var accepting = (bits & (NotAvailable | ServerUnknown | PendingDeletion)) == 0;
+        return (state, reasons, accepting);
     }
 
     private static string GetJobStateReason(PrintJobState state) => state switch

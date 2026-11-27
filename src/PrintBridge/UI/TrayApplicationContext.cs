@@ -59,6 +59,10 @@ public sealed class TrayApplicationContext : ApplicationContext
             _settings.Current.Printers.Where(p => p.Enabled).Select(p => p.WindowsPrinterName).ToArray());
         if (!_settings.Current.Printers.Any(p => p.Enabled))
             report += "\n[!] Chưa chọn máy in để phát trên LAN. Mở Settings và chọn máy in.";
+        var denied = ClientAccess.Denied();
+        if (denied.Length > 0)
+            report += $"\n[!] Yêu cầu in từ {string.Join(", ", denied)} bị chặn vì chưa được phép. " +
+                      "Thiết bị sẽ báo máy in ngoại tuyến. Vào Configure Firewall → chọn đúng IP → Cho phép in.";
         if (_server.LastError is { } error) report += "\n[!] " + error;
         foreach (var queue in _settings.Current.Printers.Where(p => p.Enabled))
             report += $"\n[i] {queue.WindowsPrinterName}: ipp://{NetworkHelper.GetLocalIPv4Address()}:{_server.BoundPort}/printers/{Uri.EscapeDataString(PrinterIdentity.GetQueuePath(queue))}";

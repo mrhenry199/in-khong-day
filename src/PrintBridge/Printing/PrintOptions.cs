@@ -7,6 +7,9 @@ public sealed class PrintOptions
     public bool? Color { get; set; }
     public int? Quality { get; set; }
     public int PagesPerSheet { get; set; } = 1;
+    public int? MediaWidthHundredthsMm { get; set; }
+    public int? MediaHeightHundredthsMm { get; set; }
+    public bool? Landscape { get; set; }
 }
 
 public readonly record struct PrintResult(bool Success, string? Error)

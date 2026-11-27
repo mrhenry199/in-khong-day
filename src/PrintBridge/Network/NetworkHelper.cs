@@ -12,7 +12,15 @@ public static class NetworkHelper
     /// <summary>
     /// Returns the best local IPv4 address on active Wi-Fi or Ethernet interfaces.
     /// </summary>
-    public static string GetLocalIPv4Address()
+    public static string GetLocalIPv4Address() =>
+        GetLocalIPv4Addresses().FirstOrDefault()?.ToString() ?? "127.0.0.1";
+
+    /// <summary>
+    /// Returns all usable local IPv4 addresses on active Wi-Fi or Ethernet
+    /// interfaces, best-scored first. Advertising every address lets clients on
+    /// multi-homed hosts pick the one on their own subnet.
+    /// </summary>
+    public static List<IPAddress> GetLocalIPv4Addresses()
     {
         try
         {
@@ -72,14 +80,15 @@ public static class NetworkHelper
                 }
             }
 
-            if (candidates.Count > 0)
-                return candidates.OrderByDescending(c => c.Score).First().Address;
+            return candidates.OrderByDescending(c => c.Score)
+                .Select(c => IPAddress.Parse(c.Address))
+                .ToList();
         }
         catch
         {
         }
 
-        return "127.0.0.1";
+        return new List<IPAddress>();
     }
 
     private static bool IsPrivateAddress(IPAddress address)

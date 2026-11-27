@@ -33,6 +33,10 @@ public sealed class IppMiddleware
             && !path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase);
         if (ipp && !ClientAccess.Permits(context.Connection.RemoteIpAddress, context.Connection.LocalIpAddress))
         {
+            var denied = context.Connection.RemoteIpAddress;
+            ClientAccess.RecordDenied(denied);
+            if (denied != null) LanDiscovery.Observe(denied);
+            System.Diagnostics.Debug.WriteLine($"IPP request denied for {denied}: not in the approved client list.");
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
         }

@@ -54,7 +54,8 @@ internal static class FirewallSetup
             var prefix = $"PrintBridge.Public.{host.Text.Trim()}.";
             var previous = legacy.Where(name => name.StartsWith(prefix, StringComparison.Ordinal))
                 .Select(name => name[prefix.Length..]).Where(ip => ValidAddress(ip, out _)).ToHashSet();
-            foreach (var ip in seen.Keys.Union(allowed ?? []).Union(known).Union(previous).Order())
+            var denied = ClientAccess.Denied();
+            foreach (var ip in seen.Keys.Union(allowed ?? []).Union(known).Union(previous).Union(denied).Order())
             {
                 string permission = allowed == null ? (previous.Contains(ip) ? "Đã có quy tắc cho phép" : "Theo firewall hiện tại") :
                     allowed.Contains(ip) ? "Được phép in" : "Chưa được phép in";

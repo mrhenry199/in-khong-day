@@ -19,6 +19,8 @@ public static class IppEncoding
     public const byte TagBoolean             = 0x22;
     public const byte TagEnum                = 0x23;
     public const byte TagOctetString         = 0x30;
+    public const byte TagBegCollection       = 0x34;
+    public const byte TagEndCollection       = 0x37;
     public const byte TagDateTime            = 0x31;
     public const byte TagResolution          = 0x32;
     public const byte TagRangeOfInteger      = 0x33;
@@ -29,6 +31,7 @@ public static class IppEncoding
     public const byte TagCharset             = 0x47;
     public const byte TagNaturalLanguage     = 0x48;
     public const byte TagMimeMediaType       = 0x49;
+    public const byte TagMemberAttrName      = 0x4A;
 
     // Operations
     public const ushort OpPrintJob             = 0x0002;
@@ -81,23 +84,24 @@ public sealed class IppRequest
     public Dictionary<string, List<IppValue>> JobAttributes { get; } = new(StringComparer.OrdinalIgnoreCase);
     public byte[]? DocumentData { get; set; }
 
-    public string? GetOperationAttribute(string name)
-    {
-        if (OperationAttributes.TryGetValue(name, out var list) && list.Count > 0)
-            return list[0].StringValue;
-        return null;
-    }
+    private IppValue? FindValue(string name) =>
+        FirstValue(OperationAttributes, name) ?? FirstValue(JobAttributes, name);
+
+    private static IppValue? FirstValue(Dictionary<string, List<IppValue>> group, string name) =>
+        group.TryGetValue(name, out var list) && list.Count > 0 ? list[0] : null;
+
+    public string? GetOperationAttribute(string name) => FindValue(name)?.StringValue;
 
     public int? GetOperationInt(string name)
     {
-        if (OperationAttributes.TryGetValue(name, out var list) && list.Count > 0)
+        var value = FindValue(name);
+        if (value is { } v)
         {
-            var value = list[0];
-            if (value.RawBytes.Length == 4)
-                return value.IntValue;
-            if (value.RawBytes.Length == 1)
-                return value.RawBytes[0];
-            if (int.TryParse(value.StringValue, out var parsed))
+            if (v.RawBytes.Length == 4)
+                return v.IntValue;
+            if (v.RawBytes.Length == 1)
+                return v.RawBytes[0];
+            if (int.TryParse(v.StringValue, out var parsed))
                 return parsed;
         }
 
@@ -106,17 +110,51 @@ public sealed class IppRequest
 
     public bool? GetOperationBool(string name)
     {
-        if (OperationAttributes.TryGetValue(name, out var list) && list.Count > 0)
+        var value = FindValue(name);
+        if (value is { } v)
         {
-            var value = list[0];
-            if (value.RawBytes.Length == 1)
-                return value.RawBytes[0] != 0;
-            if (bool.TryParse(value.StringValue, out var parsed))
+            if (v.RawBytes.Length == 1)
+                return v.RawBytes[0] != 0;
+            if (bool.TryParse(v.StringValue, out var parsed))
                 return parsed;
-            return value.BoolValue;
+            return v.BoolValue;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Extracts integer-valued members of an IPP collection attribute (e.g.
+    /// media-col -> media-size -> x-dimension/y-dimension). Collection members are
+    /// parsed flat under the collection's attribute name.
+    /// </summary>
+    public Dictionary<string, int> GetCollectionIntegers(string name)
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        CollectIntegers(OperationAttributes, name, result);
+        CollectIntegers(JobAttributes, name, result);
+        return result;
+    }
+
+    private static void CollectIntegers(Dictionary<string, List<IppValue>> group, string name,
+        Dictionary<string, int> result)
+    {
+        if (!group.TryGetValue(name, out var list)) return;
+        string? member = null;
+        foreach (var v in list)
+        {
+            if (v.Tag == IppEncoding.TagMemberAttrName)
+            {
+                member = v.StringValue;
+                continue;
+            }
+            if (member != null
+                && (v.Tag == IppEncoding.TagInteger || v.Tag == IppEncoding.TagEnum)
+                && v.RawBytes.Length == 4)
+            {
+                result[member] = v.IntValue;
+            }
+        }
     }
 
     public static IppRequest Parse(byte[] data)
@@ -311,6 +349,71 @@ public sealed class IppResponseBuilder
         WriteInt32BE(lower);
         WriteInt32BE(upper);
         return this;
+    }
+
+    public IppResponseBuilder AddResolution(string name, int xDpi, int yDpi, byte units = 3)
+    {
+        _ms.WriteByte(IppEncoding.TagResolution);
+        WriteString(name);
+        WriteResolutionValue(xDpi, yDpi, units);
+        return this;
+    }
+
+    public IppResponseBuilder AddResolutionValue(int xDpi, int yDpi, byte units = 3)
+    {
+        _ms.WriteByte(IppEncoding.TagResolution);
+        WriteUInt16BE(0);
+        WriteResolutionValue(xDpi, yDpi, units);
+        return this;
+    }
+
+    public IppResponseBuilder BeginCollection(string name)
+    {
+        _ms.WriteByte(IppEncoding.TagBegCollection);
+        WriteString(name);
+        WriteUInt16BE(0);
+        return this;
+    }
+
+    public IppResponseBuilder BeginCollectionValue()
+    {
+        _ms.WriteByte(IppEncoding.TagBegCollection);
+        WriteUInt16BE(0);
+        WriteUInt16BE(0);
+        return this;
+    }
+
+    public IppResponseBuilder EndCollection()
+    {
+        _ms.WriteByte(IppEncoding.TagEndCollection);
+        WriteUInt16BE(0);
+        WriteUInt16BE(0);
+        return this;
+    }
+
+    public IppResponseBuilder AddMemberAttrName(string memberName)
+    {
+        _ms.WriteByte(IppEncoding.TagMemberAttrName);
+        WriteUInt16BE(0);
+        WriteString(memberName);
+        return this;
+    }
+
+    public IppResponseBuilder AddMemberInteger(int value)
+    {
+        _ms.WriteByte(IppEncoding.TagInteger);
+        WriteUInt16BE(0);
+        WriteUInt16BE(4);
+        WriteInt32BE(value);
+        return this;
+    }
+
+    private void WriteResolutionValue(int xDpi, int yDpi, byte units)
+    {
+        WriteUInt16BE(9);
+        WriteInt32BE(xDpi);
+        WriteInt32BE(yDpi);
+        _ms.WriteByte(units);
     }
 
     public byte[] Build()

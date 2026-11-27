@@ -540,6 +540,70 @@ public sealed class WindowsPrinterBridge
                 printDoc.DefaultPageSettings.Color = options.Color.Value;
         }
         catch { }
+
+        try
+        {
+            if (options.MediaWidthHundredthsMm is int mediaWidth
+                && options.MediaHeightHundredthsMm is int mediaHeight)
+            {
+                // PaperSize dimensions are in hundredths of an inch.
+                int width = (int)Math.Round(mediaWidth / 25.4);
+                int height = (int)Math.Round(mediaHeight / 25.4);
+
+                PaperSize? match = null;
+                foreach (PaperSize size in printDoc.PrinterSettings.PaperSizes)
+                {
+                    if (Math.Abs(size.Width - width) <= 6 && Math.Abs(size.Height - height) <= 6)
+                    {
+                        match = size;
+                        break;
+                    }
+                }
+
+                printDoc.DefaultPageSettings.PaperSize =
+                    match ?? new PaperSize($"IPP {mediaWidth}x{mediaHeight}", width, height);
+            }
+        }
+        catch { }
+
+        try
+        {
+            if (options.Landscape is bool landscape)
+                printDoc.DefaultPageSettings.Landscape = landscape;
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// Returns the spooler queue status bits (PRINTER_INFO_6 / PRINTER_STATUS_*).
+    /// Returns PRINTER_STATUS_NOT_AVAILABLE when the queue cannot be opened.
+    /// </summary>
+    public uint GetQueueStatusBits(string printerName)
+    {
+        if (!NativeMethods.OpenPrinterW(printerName, out var handle, IntPtr.Zero))
+            return 0x1000;
+
+        try
+        {
+            NativeMethods.GetPrinterW(handle, 6, IntPtr.Zero, 0, out var needed);
+            if (needed <= 0) return 0;
+
+            var buffer = Marshal.AllocHGlobal(needed);
+            try
+            {
+                return NativeMethods.GetPrinterW(handle, 6, buffer, needed, out _)
+                    ? (uint)Marshal.ReadInt32(buffer)
+                    : 0;
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        }
+        finally
+        {
+            NativeMethods.ClosePrinter(handle);
+        }
     }
 
     private static string? ExtractPrintableText(byte[] data, string extension, string mime)

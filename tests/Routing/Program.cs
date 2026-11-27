@@ -36,6 +36,28 @@ Check((int)PrintJobState.Aborted == 8 && (int)PrintJobState.Canceled == 7, "IPP 
 
 Check(handler.GetAllJobs().Single().FromNetwork, "IPP job marked for silent printing");
 Check(!handler.SubmitDirectJob("B", "local", "text/plain", [1]).FromNetwork, "local job keeps host notifications");
+
+// media-col / orientation / number-up must reach the spooler options
+var mediaJob = new IppResponseBuilder(2, 0, IppEncoding.OpPrintJob, 1).BeginOperationAttributes()
+    .BeginCollection("media-col")
+      .AddMemberAttrName("media-size")
+      .BeginCollectionValue()
+        .AddMemberAttrName("x-dimension").AddMemberInteger(21590)
+        .AddMemberAttrName("y-dimension").AddMemberInteger(27940)
+      .EndCollection()
+    .EndCollection()
+    .AddEnum("orientation-requested", 4)
+    .AddInteger("number-up", 4)
+    .Build();
+handler.HandleRequest([..mediaJob, 1], "B");
+Check(spool.LastOptions is { MediaWidthHundredthsMm: 21590, MediaHeightHundredthsMm: 27940,
+    Landscape: true, PagesPerSheet: 4 }, "media-col, orientation and number-up applied");
+
+var mediaKwJob = new IppResponseBuilder(2, 0, IppEncoding.OpPrintJob, 1).BeginOperationAttributes()
+    .AddKeyword("media", "iso_a4_210x297mm").Build();
+handler.HandleRequest([..mediaKwJob, 1], "B");
+Check(spool.LastOptions is { MediaWidthHundredthsMm: 21000, MediaHeightHundredthsMm: 29700 },
+    "media keyword applied");
 var local = System.Net.IPAddress.Parse("192.0.2.22");
 var neighbors = PrintBridge.Network.LanDiscovery.ProbeAddresses(local, 30).Select(ip => ip.ToString()).ToArray();
 Check(neighbors.SequenceEqual(new[] { "192.0.2.21" }), "LAN probe stays in subnet and excludes self and broadcast");
@@ -46,9 +68,12 @@ namespace PrintBridge.Printing
     public sealed class WindowsPrinterBridge
     {
         public int Count { get; private set; }
+        public PrintOptions? LastOptions { get; private set; }
+        public uint GetQueueStatusBits(string printer) => 0;
         public PrintResult SendToSpooler(string printer, byte[] data, string name, string mime, PrintOptions? options, bool fromNetwork = false)
         {
             Count++;
+            LastOptions = options;
             return PrintResult.Ok();
         }
     }

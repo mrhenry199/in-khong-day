@@ -34,12 +34,9 @@ public sealed class AirPrintAdvertiser : IDisposable
 
                 _mdns.QueryReceived += (_, query) => LanDiscovery.Observe(query.RemoteEndPoint.Address);
                 _mdns.Start();
-                var localIpStr = NetworkHelper.GetLocalIPv4Address();
-                var ipList = new List<IPAddress>();
-                if (IPAddress.TryParse(localIpStr, out var localIp) && !IPAddress.IsLoopback(localIp))
-                {
-                    ipList.Add(localIp);
-                }
+                var ipList = NetworkHelper.GetLocalIPv4Addresses()
+                    .Where(ip => !IPAddress.IsLoopback(ip))
+                    .ToList();
 
                 foreach (var printer in printers.Where(p => p.Enabled))
                 {
