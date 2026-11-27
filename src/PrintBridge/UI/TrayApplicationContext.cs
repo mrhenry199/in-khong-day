@@ -276,6 +276,7 @@ public sealed class TrayApplicationContext : ApplicationContext
 
     private void OnJobReceived(PrintJob job)
     {
+        if (job.FromNetwork) return;
         _notifyIcon.BalloonTipTitle = "Print Job Received";
         _notifyIcon.BalloonTipText = $"Printing '{job.DocumentName}' to {job.PrinterName}...";
         _notifyIcon.BalloonTipIcon = ToolTipIcon.Info;

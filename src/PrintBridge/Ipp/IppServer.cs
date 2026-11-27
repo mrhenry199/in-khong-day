@@ -59,7 +59,7 @@ public sealed class IppRequestHandler
         _printerBridge = printerBridge;
     }
 
-    public byte[] HandleRequest(byte[] requestData, string printerName, string? requestedPrinterUri = null)
+    public byte[] HandleRequest(byte[] requestData, string printerName, string? requestedPrinterUri = null, bool fromNetwork = true)
     {
         try
         {
@@ -84,13 +84,13 @@ public sealed class IppRequestHandler
             return req.OperationId switch
             {
                 IppEncoding.OpGetPrinterAttributes => HandleGetPrinterAttributes(req, resolvedName, printerUri),
-                IppEncoding.OpPrintJob => HandlePrintJob(req, resolvedName, printerUri),
+                IppEncoding.OpPrintJob => HandlePrintJob(req, resolvedName, printerUri, fromNetwork),
                 IppEncoding.OpValidateJob => HandleValidateJob(req, resolvedName),
                 IppEncoding.OpGetJobs => HandleGetJobs(req, resolvedName, printerUri),
                 IppEncoding.OpGetJobAttributes => HandleGetJobAttributes(req, resolvedName, printerUri),
                 IppEncoding.OpCancelJob => HandleCancelJob(req, resolvedName),
                 IppEncoding.OpCreateJob => HandleCreateJob(req, resolvedName, printerUri),
-                IppEncoding.OpSendDocument => HandleSendDocument(req, resolvedName, printerUri),
+                IppEncoding.OpSendDocument => HandleSendDocument(req, resolvedName, printerUri, fromNetwork),
                 _ => BuildErrorResponse(req, IppEncoding.StatusServerError, "Operation not supported")
             };
         }
@@ -211,7 +211,7 @@ public sealed class IppRequestHandler
         return rb.Build();
     }
 
-    private byte[] HandlePrintJob(IppRequest req, string printerName, string printerUri)
+    private byte[] HandlePrintJob(IppRequest req, string printerName, string printerUri, bool fromNetwork)
     {
         var docName = req.GetOperationAttribute("job-name") ?? "Mobile Print Document";
         var mimeType = req.GetOperationAttribute("document-format") ?? "application/pdf";
@@ -232,9 +232,10 @@ public sealed class IppRequestHandler
         };
 
         _jobs[jobId] = job;
-        JobReceived?.Invoke(job);
 
-        var result = _printerBridge.SendToSpooler(printerName, req.DocumentData, docName, mimeType, options);
+        job.FromNetwork = fromNetwork;
+        JobReceived?.Invoke(job);
+        var result = _printerBridge.SendToSpooler(printerName, req.DocumentData, docName, mimeType, options, fromNetwork);
         job.State = result.Success ? PrintJobState.Completed : PrintJobState.Aborted;
         if (!result.Success) job.ErrorMessage = result.Error ?? "Windows spooler rejected print payload.";
 
@@ -364,7 +365,7 @@ public sealed class IppRequestHandler
         return rb.Build();
     }
 
-    private byte[] HandleSendDocument(IppRequest req, string printerName, string printerUri)
+    private byte[] HandleSendDocument(IppRequest req, string printerName, string printerUri, bool fromNetwork)
     {
         int jobId = GetJobId(req);
 
@@ -387,8 +388,9 @@ public sealed class IppRequestHandler
             job.MimeType = mimeType;
             job.State = PrintJobState.Processing;
         }
+        job.FromNetwork = fromNetwork;
         JobReceived?.Invoke(job);
-        var result = _printerBridge.SendToSpooler(printerName, payload, job.DocumentName, mimeType, options);
+        var result = _printerBridge.SendToSpooler(printerName, payload, job.DocumentName, mimeType, options, fromNetwork);
         var success = result.Success;
         job.State = success ? PrintJobState.Completed : PrintJobState.Aborted;
         job.ErrorMessage = success ? null : result.Error ?? "Spooler rejected job.";

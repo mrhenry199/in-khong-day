@@ -31,6 +31,11 @@ public sealed class IppMiddleware
         var ipp = HttpMethods.IsPost(context.Request.Method)
             && string.Equals(context.Request.ContentType?.Split(';')[0].Trim(), "application/ipp", StringComparison.OrdinalIgnoreCase)
             && !path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase);
+        if (ipp && !ClientAccess.Permits(context.Connection.RemoteIpAddress, context.Connection.LocalIpAddress))
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            return;
+        }
         if (!ipp)
         {
             var remote = context.Connection.RemoteIpAddress;
@@ -133,7 +138,8 @@ public sealed class IppMiddleware
             var requestBytes = ms.ToArray();
             var requestedPrinterUri = BuildRequestPrinterUri(context);
 
-            var responseBytes = _handler.HandleRequest(requestBytes, printerName, requestedPrinterUri);
+            var responseBytes = _handler.HandleRequest(requestBytes, printerName, requestedPrinterUri,
+                !ClientAccess.IsLocal(context.Connection.RemoteIpAddress, context.Connection.LocalIpAddress));
 
             context.Response.StatusCode = 200;
             context.Response.ContentType = "application/ipp";

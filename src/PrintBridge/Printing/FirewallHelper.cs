@@ -5,14 +5,20 @@ namespace PrintBridge.Printing;
 
 public static class FirewallHelper
 {
-    public static bool AddFirewallRules(int ippPort = 631) =>
-        ippPort is >= 1 and <= 65535 && Run("-IppPort " + ippPort);
+    public static bool AddFirewallRules(int ippPort = 631, bool shareAll = false) =>
+        ippPort is >= 1 and <= 65535 && Run("-IppPort " + ippPort + (shareAll ? " -ShareAll" : ""));
 
-    internal static bool AllowClient(int port, System.Net.IPAddress local, System.Net.IPAddress remote, bool enableMdns)
+    internal static bool AllowClient(int port, System.Net.IPAddress local, System.Net.IPAddress remote, bool enableMdns, bool revoke = false)
     {
         if (port is < 1 or > 65535 || Environment.ProcessPath is not { } path) return false;
         var executable = Convert.ToBase64String(Encoding.UTF8.GetBytes(path));
-        return Run($"-IppPort {port} -LocalIPv4 '{local}' -ClientIPv4 '{remote}' -AppBase64 '{executable}' " + (enableMdns ? "-EnableMdns" : ""));
+        return Run($"-IppPort {port} -LocalIPv4 '{local}' -ClientIPv4 '{remote}' -AppBase64 '{executable}' " + (enableMdns ? "-EnableMdns " : "") + (revoke ? "-Revoke" : ""));
+    }
+
+    internal static bool EnableDiscovery(int port, System.Net.IPAddress local)
+    {
+        var exe = Convert.ToBase64String(Encoding.UTF8.GetBytes(Environment.ProcessPath!));
+        return Run($"-IppPort {port} -LocalIPv4 '{local}' -AppBase64 '{exe}' -DiscoveryOnly -EnableMdns");
     }
 
     public static void RemoveFirewallRules() => Run("-Remove");

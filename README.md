@@ -41,3 +41,11 @@ dotnet publish src/PrintBridge/PrintBridge.csproj -c Release -r win-x64 --self-c
 Các test định tuyến dùng spooler giả. Chưa đo độ trễ A/B và chưa chạy ma trận iPhone, Android, macOS, Windows với máy in USB thực tế. Bridge có đường xử lý PDF, ảnh và URF. PWG Raster còn thiếu. Khả năng tương thích IPP Everywhere/Mopria chưa được xác minh. Lịch sử lệnh in hiện giữ tài liệu trong RAM để in lại. Dùng trên LAN tin cậy vì IPP hiện chưa xác thực và chưa bật TLS.
 
 Trên Windows, thử lần lượt spooler dừng, hàng đợi đã xóa, quy tắc firewall thiếu, cổng IPP bận, máy in offline và máy hoạt động bình thường. Kiểm tra cả khi chạy tool bằng tài khoản thường. Đo thời điểm mở hộp thoại, nhận lệnh và ra tờ đầu.
+
+### iPhone và quyền in theo thiết bị
+
+Trong **Configure Firewall**, chọn IPv4 của máy chủ rồi bấm **Bật tìm máy in qua Bonjour**. Mở **Chia sẻ → In → Chọn máy in** trên iPhone cùng LAN, sau đó bấm **Quét thiết bị LAN** trên máy chủ. Danh sách kết hợp kết quả quét, bảng ARP và các IP vừa gửi truy vấn Bonjour. Nếu điện thoại chưa xuất hiện, nhập IPv4 ở **Cài đặt → Wi-Fi → ⓘ** trên iPhone.
+
+Bấm **Cho phép in** để bật danh sách IP được duyệt cho toàn bộ máy chủ. PrintBridge kiểm tra IP nguồn của mỗi yêu cầu IPP. **Gỡ quyền in** có hiệu lực cho yêu cầu tiếp theo. IP đã quản lý vẫn xuất hiện khi thiết bị ngoại tuyến. Nếu DHCP đổi IP, gỡ địa chỉ cũ và thêm địa chỉ mới. Quyền trong ứng dụng và khả năng đi qua router/firewall là hai điều kiện riêng.
+
+Khi in từ LAN, PrintBridge gửi việc in xuống Windows ở chế độ nền và ghi vào **Print Jobs**. Máy chủ vẫn có thể mở hàng đợi thủ công. Cửa sổ trạng thái do phần mềm của hãng máy in điều khiển có thể có tùy chọn riêng.

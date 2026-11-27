@@ -9,6 +9,18 @@ namespace PrintBridge.Network;
 
 internal static class LanDiscovery
 {
+    private static readonly Dictionary<IPAddress, DateTime> Seen = new();
+
+    internal static void Observe(IPAddress ip)
+    {
+        if (ip.AddressFamily != AddressFamily.InterNetwork || IPAddress.IsLoopback(ip)) return;
+        lock (Seen)
+        {
+            if (Seen.Count >= 512 && !Seen.ContainsKey(ip)) Seen.Remove(Seen.MinBy(p => p.Value).Key);
+            Seen[ip] = DateTime.UtcNow;
+        }
+    }
+
     internal sealed record Device(IPAddress Address, string Mac)
     {
         public override string ToString() => string.IsNullOrEmpty(Mac) ? Address.ToString() : $"{Address}    {Mac}";
@@ -73,6 +85,11 @@ internal static class LanDiscovery
             if (octets.Length == 6 && (octets[0] & 1) == 0 && octets.Any(b => b != 0))
                 devices[ip] = fields[1];
         }
+        var subnet = new System.Net.IPNetwork(new IPAddress(local.GetAddressBytes().Zip(adapter.IPv4Mask.GetAddressBytes(), (a,b) => (byte)(a & b)).ToArray()), adapter.PrefixLength);
+        lock (Seen)
+            foreach (var (ip, when) in Seen)
+                if (!ip.Equals(local) && subnet.Contains(ip) && DateTime.UtcNow - when < TimeSpan.FromMinutes(15))
+                    devices.TryAdd(ip, "Bonjour");
         return devices.OrderBy(p => BinaryPrimitives.ReadUInt32BigEndian(p.Key.GetAddressBytes()))
             .Select(p => new Device(p.Key, p.Value)).ToList();
     }

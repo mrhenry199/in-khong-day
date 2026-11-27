@@ -31,7 +31,7 @@ public sealed class WindowsPrinterBridge
         byte[] data,
         string documentName = "PrintBridge Job",
         string mimeType = "application/pdf",
-        PrintOptions? options = null)
+        PrintOptions? options = null, bool fromNetwork = false)
     {
         if (string.IsNullOrWhiteSpace(printerName) || data == null || data.Length == 0)
             return PrintResult.Fail("No printer or empty document was provided.");
@@ -44,6 +44,9 @@ public sealed class WindowsPrinterBridge
 
         try
         {
+            if (fromNetwork && !HasUnattendedPort(printerName))
+                return PrintResult.Fail("This queue needs an interactive output port or its port could not be verified. Select a physical printer.");
+
             if (IsPdf(data) || mime.Contains("pdf"))
             {
                 return PrintPdfNative(printerName, data, documentName, options)
@@ -857,8 +860,37 @@ public sealed class WindowsPrinterBridge
         }
     }
 
+    private static bool HasUnattendedPort(string printerName)
+    {
+        if (!NativeMethods.OpenPrinterW(printerName, out var handle, IntPtr.Zero)) return false;
+        IntPtr buffer = IntPtr.Zero;
+        try
+        {
+            NativeMethods.GetPrinterW(handle, 5, buffer, 0, out var bytes);
+            if (bytes <= 0) return false;
+            buffer = Marshal.AllocHGlobal(bytes);
+            if (!NativeMethods.GetPrinterW(handle, 5, buffer, bytes, out _)) return false;
+            // PRINTER_INFO_5 starts with pointers to the printer and port names.
+            var ports = Marshal.PtrToStringUni(Marshal.ReadIntPtr(buffer, IntPtr.Size));
+            return !string.IsNullOrWhiteSpace(ports) && ports.Split(',').All(port =>
+                !new[] { "FILE:", "PORTPROMPT:", "SHRFAX:", "NUL:" }.Contains(port.Trim(), StringComparer.OrdinalIgnoreCase)
+                && !port.Contains("onenote", StringComparison.OrdinalIgnoreCase)
+                && !port.Contains("foxit", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            if (buffer != IntPtr.Zero) Marshal.FreeHGlobal(buffer);
+            NativeMethods.ClosePrinter(handle);
+        }
+    }
+
     private static class NativeMethods
     {
+        [DllImport("winspool.drv", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        internal static extern bool OpenPrinterW(string printer, out IntPtr handle, IntPtr defaults);
+        [DllImport("winspool.drv", ExactSpelling = true)]
+        internal static extern bool GetPrinterW(IntPtr handle, int level, IntPtr buffer, int size, out int needed);
+
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
         public class DOCINFOA
         {

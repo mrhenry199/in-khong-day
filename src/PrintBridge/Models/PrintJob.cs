@@ -5,6 +5,7 @@ namespace PrintBridge.Models;
 /// </summary>
 public sealed class PrintJob
 {
+    public bool FromNetwork { get; set; }
     public int JobId { get; set; }
     public string PrinterName { get; set; } = string.Empty;
     public string DocumentName { get; set; } = "Untitled Document";

@@ -32,7 +32,8 @@ public sealed class AirPrintAdvertiser : IDisposable
                 _mdns = new MulticastService();
                 _sd = new ServiceDiscovery(_mdns);
 
-                var hostName = NetworkHelper.GetHostName();
+                _mdns.QueryReceived += (_, query) => LanDiscovery.Observe(query.RemoteEndPoint.Address);
+                _mdns.Start();
                 var localIpStr = NetworkHelper.GetLocalIPv4Address();
                 var ipList = new List<IPAddress>();
                 if (IPAddress.TryParse(localIpStr, out var localIp) && !IPAddress.IsLoopback(localIp))
@@ -48,12 +49,6 @@ public sealed class AirPrintAdvertiser : IDisposable
 
                     // Service type _ipp._tcp is used by AirPrint, Mopria, and IPP Everywhere
                     var profile = new ServiceProfile(safeName, "_ipp._tcp", (ushort)ippPort, ipList.Count > 0 ? ipList : null);
-
-                    try
-                    {
-                        profile.HostName = DomainName.Join(hostName, "local");
-                    }
-                    catch { }
 
                     var safeQueue = PrinterIdentity.GetQueuePath(printer);
 
@@ -86,9 +81,9 @@ public sealed class AirPrintAdvertiser : IDisposable
 
                     _profiles.Add(profile);
                     _sd.Advertise(profile);
+                    _sd.Announce(profile, 2);
                 }
 
-                _mdns.Start();
             }
             catch (Exception ex)
             {

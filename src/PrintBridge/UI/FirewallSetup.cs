@@ -8,65 +8,111 @@ internal static class FirewallSetup
 {
     internal static void Show(int port)
     {
-        using var form = new Form { Text = "Cấu hình firewall", ClientSize = new Size(565, 490),
-            StartPosition = FormStartPosition.CenterScreen, FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false, MinimizeBox = false };
+        using var form = new Form { Text = "Thiết bị được phép in", ClientSize = new Size(610, 530),
+            StartPosition = FormStartPosition.CenterScreen, AutoScroll = true };
         var panel = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown,
-            WrapContents = false, Padding = new Padding(12) };
-        var lan = new RadioButton { Text = "LAN Private/Domain (IPP và tự tìm máy in)", AutoSize = true };
-        var single = new RadioButton { Text = "Public – cho phép một máy khách in bằng địa chỉ IPP", AutoSize = true, Checked = true };
-        var host = new TextBox { Width = 200, Text = NetworkHelper.GetLocalIPv4Address() };
-        var client = new TextBox { Width = 200, PlaceholderText = "IPv4 máy khách" };
-        var enableMdns = new CheckBox { Text = "Cho iPhone tìm máy in (mDNS UDP/5353, chỉ mạng nội bộ)", AutoSize = true, Checked = true };
-        var scan = new Button { Text = "Quét máy trong LAN", AutoSize = true };
-        var list = new ListBox { Width = 510, Height = 110 };
-        var status = new Label { Width = 510, Height = 38, Text = "Quét rồi chọn máy khách hoặc nhập IPv4 bên dưới." };
+            WrapContents = false, AutoScroll = true, Padding = new Padding(12) };
+        var host = new TextBox { Width = 220, Text = NetworkHelper.GetLocalIPv4Address() };
+        var discover = new Button { Text = "Bật tìm máy in qua Bonjour", AutoSize = true };
+        var scan = new Button { Text = "Quét thiết bị LAN", AutoSize = true };
+        var list = new ListBox { Width = 550, Height = 160 };
+        var client = new TextBox { Width = 220, PlaceholderText = "IPv4 máy khách" };
+        var allow = new Button { Text = "Cho phép in", AutoSize = true };
+        var revoke = new Button { Text = "Gỡ quyền in", AutoSize = true };
+        var all = new Button { Text = "Chia sẻ cả LAN Private/Domain…", AutoSize = true };
+        var buttons = new FlowLayoutPanel { AutoSize = true };
+        buttons.Controls.AddRange([allow, revoke, all]);
+        var status = new Label { Width = 550, Height = 54 };
+        panel.Controls.AddRange([new Label { Text = "IPv4 máy chủ", AutoSize = true }, host, discover, scan, list,
+            new Label { Text = "Chọn thiết bị hoặc nhập IPv4. Khi dùng danh sách, chỉ IP được duyệt mới được in.", AutoSize = true },
+            client, buttons, status]);
+        form.Controls.Add(panel);
+        var seen = new Dictionary<string, string>();
         using var stop = new CancellationTokenSource();
         form.FormClosing += (_, _) => stop.Cancel();
-        var apply = new Button { Text = "Chấp nhận", AutoSize = true };
-        panel.Controls.AddRange([lan, single, new Label { Text = "IPv4 máy chủ", AutoSize = true }, host, enableMdns, scan, list, status,
-            new Label { Text = "IPv4 máy khách được phép", AutoSize = true }, client, apply]);
-        form.Controls.Add(panel);
-        single.CheckedChanged += (_, _) => scan.Enabled = list.Enabled = host.Enabled = client.Enabled = enableMdns.Enabled = single.Checked;
-        host.TextChanged += (_, _) => { list.Items.Clear(); client.Clear(); };
+
+        // Legacy versions only saved the grants in Windows Firewall.
+        var legacy = new List<string>();
+        if (ClientAccess.Allowed() == null)
+        {
+            try
+            {
+                var type = Type.GetTypeFromProgID("HNetCfg.FwPolicy2", throwOnError: true)!;
+                dynamic policy = Activator.CreateInstance(type)!;
+                foreach (dynamic rule in policy.Rules)
+                    if (rule.Enabled && (int)rule.Action == 1 && (string)rule.Grouping == "PrintBridge Public IPP")
+                        legacy.Add((string)rule.Name);
+            }
+            catch (System.Runtime.InteropServices.COMException) { }
+        }
+
+        void RefreshList()
+        {
+            list.Items.Clear();
+            var allowed = ClientAccess.Allowed();
+            var known = ClientAccess.Known();
+            var prefix = $"PrintBridge.Public.{host.Text.Trim()}.";
+            var previous = legacy.Where(name => name.StartsWith(prefix, StringComparison.Ordinal))
+                .Select(name => name[prefix.Length..]).Where(ip => ValidAddress(ip, out _)).ToHashSet();
+            foreach (var ip in seen.Keys.Union(allowed ?? []).Union(known).Union(previous).Order())
+            {
+                string permission = allowed == null ? (previous.Contains(ip) ? "Đã có quy tắc cho phép" : "Theo firewall hiện tại") :
+                    allowed.Contains(ip) ? "Được phép in" : "Chưa được phép in";
+                list.Items.Add($"{ip}    {permission}    {seen.GetValueOrDefault(ip)}");
+            }
+        }
+
         list.SelectedIndexChanged += (_, _) =>
         {
-            if (list.SelectedItem is LanDiscovery.Device device) client.Text = device.Address.ToString();
+            if (list.SelectedItem is string row) client.Text = row.Split(' ')[0];
         };
+        host.TextChanged += (_, _) => { seen.Clear(); client.Clear(); RefreshList(); };
         scan.Click += async (_, _) =>
         {
             if (!ValidAddress(host.Text, out var local)) { status.Text = "IPv4 máy chủ chưa hợp lệ."; return; }
-            scan.Enabled = apply.Enabled = host.Enabled = client.Enabled = lan.Enabled = single.Enabled = false;
-            list.Items.Clear();
-            status.Text = "Đang tìm thiết bị trên LAN…";
+            scan.Enabled = host.Enabled = false;
+            status.Text = "Đang tìm thiết bị…";
             try
             {
                 var devices = await LanDiscovery.ScanAsync(local, stop.Token);
                 if (stop.IsCancellationRequested) return;
-                list.Items.AddRange(devices.ToArray());
-                status.Text = $"Tìm thấy {devices.Count} thiết bị. Chọn đúng IPv4 máy khách; có thể nhập tay nếu máy chưa xuất hiện.";
+                seen.Clear();
+                foreach (var d in devices) seen[d.Address.ToString()] = d.Mac;
+                RefreshList();
+                status.Text = $"Thấy {devices.Count} thiết bị. Nếu thiếu iPhone, mở In → Chọn máy in rồi quét lại, hoặc nhập IPv4 từ cài đặt Wi-Fi của iPhone.";
             }
-            catch (OperationCanceledException) { if (!stop.IsCancellationRequested) status.Text = "Quét hết thời gian. Có thể nhập IP thủ công."; }
             catch (Exception ex) { if (!stop.IsCancellationRequested) status.Text = ex.Message; }
-            finally { if (!stop.IsCancellationRequested) scan.Enabled = apply.Enabled = host.Enabled = client.Enabled = lan.Enabled = single.Enabled = true; }
+            finally { if (!stop.IsCancellationRequested) scan.Enabled = host.Enabled = true; }
         };
-        apply.Click += (_, _) =>
+        discover.Click += (_, _) =>
         {
-            bool ok;
-            if (single.Checked)
-            {
-                if (!ValidAddress(host.Text, out var local) || !ValidAddress(client.Text, out var remote) || local.Equals(remote))
-                {
-                    MessageBox.Show(form, "Nhập hai địa chỉ IPv4 khác nhau của máy chủ và máy khách.");
-                    return;
-                }
-                ok = FirewallHelper.AllowClient(port, local, remote, enableMdns.Checked);
-            }
-            else ok = FirewallHelper.AddFirewallRules(port);
-            MessageBox.Show(form, ok ? $"Đã lưu quy tắc TCP/{port}" + (single.Checked && enableMdns.Checked ? " và mDNS/UDP 5353 cho iPhone trong LAN." : ". Hãy thử từ máy khách.")
-                : "Chưa áp dụng được. Kiểm tra quyền quản trị, IP máy chủ và profile của card mạng.");
-            if (ok) form.Close();
+            if (!ValidAddress(host.Text, out var local)) { status.Text = "IPv4 máy chủ chưa hợp lệ."; return; }
+            status.Text = FirewallHelper.EnableDiscovery(port, local)
+                ? "Đã bật Bonjour. Trên iPhone mở In → Chọn máy in, rồi bấm Quét thiết bị LAN."
+                : "Chưa bật được Bonjour. Kiểm tra quyền quản trị và IPv4 máy chủ.";
         };
+        void SetPermission(bool remove)
+        {
+            if (!ValidAddress(host.Text, out var local) || !ValidAddress(client.Text, out var remote) || local.Equals(remote))
+            {
+                status.Text = "Nhập hai địa chỉ IPv4 khác nhau của máy chủ và máy khách.";
+                return;
+            }
+            var ok = FirewallHelper.AllowClient(port, local, remote, !remove, remove);
+            RefreshList();
+            status.Text = ok ? $"Đã {(remove ? "gỡ quyền" : "cho phép")} in cho {remote}." : "Chưa áp dụng xong. Kiểm tra thông báo firewall.";
+        }
+        allow.Click += (_, _) => SetPermission(false);
+        revoke.Click += (_, _) => SetPermission(true);
+        all.Click += (_, _) =>
+        {
+            if (MessageBox.Show(form, "Tắt giới hạn danh sách IP của ứng dụng và cho phép toàn mạng Private/Domain in?", "Chia sẻ cả LAN",
+                MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+            status.Text = FirewallHelper.AddFirewallRules(port, shareAll: true) ? "Đã chuyển sang quyền theo firewall." : "Chưa áp dụng được.";
+            RefreshList();
+        };
+        RefreshList();
+        form.Shown += (_, _) => scan.PerformClick();
         form.ShowDialog();
     }
 
