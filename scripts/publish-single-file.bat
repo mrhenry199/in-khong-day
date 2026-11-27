@@ -20,7 +20,7 @@ echo [1/2] Creating publish directory...
 if not exist "publish" mkdir "publish"
 
 echo [2/2] Publishing PrintBridge.exe (Single-file Windows x64)...
-dotnet publish src\PrintBridge\PrintBridge.csproj -c Release -r win-x64 --self-contained false -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "publish"
+dotnet publish src\PrintBridge\PrintBridge.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "publish"
 
 if %ERRORLEVEL% neq 0 (
     echo.

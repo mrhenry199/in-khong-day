@@ -53,6 +53,31 @@ public sealed class TrayApplicationContext : ApplicationContext
         _ = StartServerAsync();
     }
 
+    private async Task<string> GetSetupReportAsync()
+    {
+        var report = await StartupChecks.RunAsync(_server.BoundPort,
+            _settings.Current.Printers.Where(p => p.Enabled).Select(p => p.WindowsPrinterName).ToArray());
+        if (!_settings.Current.Printers.Any(p => p.Enabled))
+            report += "\n[!] Chưa chọn máy in để phát trên LAN. Mở Settings và chọn máy in.";
+        if (_server.LastError is { } error) report += "\n[!] " + error;
+        return report;
+    }
+
+    private void ShowFirstRun()
+    {
+        using var form = new FirstRunForm(GetSetupReportAsync, () => _server.BoundPort, () =>
+        {
+            using var settings = new SettingsForm(_settings, _server);
+            settings.ShowDialog();
+            BuildContextMenu();
+        });
+        if (form.ShowDialog() == DialogResult.OK)
+        {
+            _settings.Current.SetupCompleted = true;
+            _settings.Save();
+        }
+    }
+
     private bool _checking;
 
     private async Task CheckSetupAsync(bool showAll)
@@ -61,11 +86,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _checking = true;
         try
         {
-            var report = await StartupChecks.RunAsync(_server.BoundPort,
-                _settings.Current.Printers.Where(p => p.Enabled).Select(p => p.WindowsPrinterName).ToArray());
-            if (!_settings.Current.Printers.Any(p => p.Enabled))
-                report += "\n[!] Chưa chọn máy in để phát trên LAN. Mở Settings và chọn máy in.";
-            if (_server.LastError is { } error) report += "\n[!] " + error;
+            var report = await GetSetupReportAsync();
             var warning = report.Contains("[!]");
             if (showAll || warning)
                 MessageBox.Show(report, "Kiểm tra máy in và mạng LAN", MessageBoxButtons.OK,
@@ -97,7 +118,8 @@ public sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon.ShowBalloonTip(5000);
 
         BuildContextMenu();
-        await CheckSetupAsync(false);
+        if (!_settings.Current.SetupCompleted) ShowFirstRun();
+        else await CheckSetupAsync(false);
     }
 
     private void BuildContextMenu()
@@ -146,6 +168,7 @@ public sealed class TrayApplicationContext : ApplicationContext
         _contextMenu.Items.Add(new ToolStripSeparator());
 
         // 3. Settings & Actions
+        AddMenuItem("Thiết lập ban đầu", AppIcons.Settings, ShowFirstRun);
         AddMenuItem("Kiểm tra máy in và mạng LAN", AppIcons.Refresh, async () => await CheckSetupAsync(true));
         AddMenuItem("Settings...", AppIcons.Settings, ShowSettings);
         AddMenuItem("Print Jobs...", AppIcons.List, ShowPrintJobs);

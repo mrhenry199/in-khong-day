@@ -4,9 +4,28 @@ Máy Windows x64 kết nối máy in USB nhận lệnh IPP của thiết bị tr
 
 ## Chạy
 
-Giải nén toàn bộ thư mục ứng dụng trên Windows x64. Với bản framework-dependent, cài .NET 8 Desktop Runtime và ASP.NET Core Runtime x64. Chạy PrintBridge.exe, mở Settings từ khay hệ thống, chọn máy in. Trên điện thoại cùng LAN, mở In trong ứng dụng và chọn tên máy in. Máy chủ cần bật và kết nối mạng.
+Giải nén gói standalone Windows x64 rồi chạy PrintBridge.exe. Gói đi kèm .NET, Windows Desktop và ASP.NET Core. Bảng thiết lập mở lần đầu để kiểm tra driver, chọn máy in và cấu hình firewall. Nhấn Hoàn tất để lưu. Mở lại bảng từ menu khay hệ thống. Trên điện thoại cùng LAN, mở In trong ứng dụng và chọn tên máy in. Máy chủ cần bật và kết nối mạng.
 
 Khi mở, ứng dụng đọc trạng thái spooler, danh sách hàng đợi, tệp driver, thiết bị PnP, profile mạng và quy tắc firewall của ứng dụng. Lỗi được hiện trong hộp thoại. Chọn **Kiểm tra máy in và mạng LAN** trong menu khay để xem lại, kể cả khi mọi kiểm tra đều đạt. Chỉ dùng Configure Firewall trên LAN tin cậy. Dashboard quản trị mở trên localhost. Kiểm tra từ host không xác nhận được multicast qua router, quy tắc chặn của bên thứ ba hoặc khả năng ra giấy. Hãy thử một trang trên thiết bị khách.
+
+## In từ thiết bị khác
+
+Trên máy chủ, in thử tại chỗ rồi bật Share cho đúng máy in và bấm Save & Apply. Giữ ứng dụng chạy. Thiết bị khách có thể dùng Wi-Fi hoặc Ethernet cùng LAN.
+
+| Thiết bị khách | Cách in |
+| --- | --- |
+| iPhone/iPad | Mở PDF hoặc ảnh, chọn Chia sẻ → In → Chọn máy in → In. |
+| Android | Bật Dịch vụ in mặc định trong Cài đặt → In. Mở tài liệu, chọn In rồi chọn máy in trong danh sách. |
+| Windows 11 | Cài đặt → Bluetooth & thiết bị → Máy in & máy quét → Thêm thiết bị. Khi đã thêm, dùng Ctrl+P trong ứng dụng. |
+| macOS | Cài đặt hệ thống → Máy in & máy quét → Thêm máy in. Chọn máy in vừa xuất hiện rồi dùng ⌘P. |
+
+Nếu Windows không tự phát hiện, mở PowerShell trên máy khách và chạy lệnh dưới với địa chỉ thực tế. Lấy IP và cổng tại Network Address trong Settings của máy chủ. Tên hàng đợi lấy từ cột Windows Printer, thay dấu cách bằng dấu gạch dưới. Ví dụ:
+
+```powershell
+Add-Printer -IppURL "ipp://192.168.1.20:631/printers/Canon_LBP2900"
+```
+
+Nếu không thấy máy in, kiểm tra host đang thức, cảnh báo trong khay hệ thống, firewall, và Wi-Fi khách có cô lập thiết bị không. Máy in xuất hiện nhưng gửi lệnh lỗi có thể liên quan đến định dạng mà hệ điều hành gửi.
 
 ## Build và kiểm thử
 
