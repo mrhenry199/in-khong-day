@@ -68,6 +68,20 @@ try {
             }
         }
         if (!$found) { "[!] $($network.InterfaceAlias) Public: vào Configure Firewall → Public, bấm Quét máy trong LAN, chọn đúng IP và bấm Chấp nhận." }
+        $mdnsName = "PrintBridge.Public.mDNS.$($local[0])"
+        $mdnsRule = Get-NetFirewallRule -Name $mdnsName -PolicyStore ActiveStore -ErrorAction SilentlyContinue
+        if ($mdnsRule -and $mdnsRule.Enabled -eq 'True' -and $mdnsRule.Action -eq 'Allow') {
+            $mdnsPorts = $mdnsRule | Get-NetFirewallPortFilter
+            $mdnsIps = $mdnsRule | Get-NetFirewallAddressFilter
+            $mdnsApp = $mdnsRule | Get-NetFirewallApplicationFilter
+            $mdnsIf = $mdnsRule | Get-NetFirewallInterfaceFilter
+            if ($mdnsPorts.Protocol -in @('UDP','17') -and $mdnsPorts.LocalPort -contains '5353' -and
+                ([string]$mdnsIps.LocalAddress) -in $local -and $mdnsIps.RemoteAddress -contains 'LocalSubnet' -and
+                [Environment]::ExpandEnvironmentVariables([string]$mdnsApp.Program) -eq $exe -and
+                $mdnsIf.InterfaceAlias -contains $network.InterfaceAlias) {
+                "[OK] Public: Bonjour/mDNS UDP/5353 chỉ trong LAN."
+            } else { "[!] Quy tắc Public mDNS chưa khớp ứng dụng/card mạng. Chấp nhận lại thiết lập firewall." }
+        } else { "[!] iPhone chưa thể tìm thấy máy in. Configure Firewall → Public → bật Cho iPhone tìm máy in." }
     }
     if (!$profiles.Count) { '[!] Chưa tìm thấy kết nối LAN.' }
     if (!$trusted.Count) { return }

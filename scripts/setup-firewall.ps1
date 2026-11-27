@@ -1,6 +1,6 @@
 #Requires -RunAsAdministrator
 param([ValidateRange(1,65535)][int]$IppPort = 631, [switch]$Remove,
-      [ipaddress]$LocalIPv4, [ipaddress]$ClientIPv4, [string]$AppBase64)
+      [ipaddress]$LocalIPv4, [ipaddress]$ClientIPv4, [string]$AppBase64, [switch]$EnableMdns)
 $ErrorActionPreference = 'Stop'
 $group = 'PrintBridge Public IPP'
 if ($ClientIPv4) {
@@ -12,13 +12,22 @@ if ($ClientIPv4) {
     $params = @{Profile='Public'; Direction='Inbound'; Action='Allow'; Protocol='TCP'; LocalPort=$IppPort;
         LocalAddress=$LocalIPv4.IPAddressToString; RemoteAddress=$ClientIPv4.IPAddressToString;
         Program=$exe; InterfaceAlias=$address.InterfaceAlias; Enabled='True'}
-    if (Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue) {
-        Set-NetFirewallRule -Name $name @params
-    } else {
-        New-NetFirewallRule -Name $name -DisplayName $name -Group $group @params | Out-Null
-    }
+    Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    New-NetFirewallRule -Name $name -DisplayName $name -Group $group @params | Out-Null
     $active = Get-NetFirewallRule -Name $name -PolicyStore ActiveStore -ErrorAction Stop
     if ($active.Enabled -ne 'True' -or $active.Action -ne 'Allow') { throw "Rule $name is not active." }
+    $mdnsName = "PrintBridge.Public.mDNS.$($LocalIPv4.IPAddressToString)"
+    if ($EnableMdns) {
+        $mdnsParams = @{Profile='Public'; Direction='Inbound'; Action='Allow'; Protocol='UDP'; LocalPort=5353;
+            LocalAddress=$LocalIPv4.IPAddressToString; RemoteAddress='LocalSubnet'; Program=$exe;
+            InterfaceAlias=$address.InterfaceAlias; Enabled='True'}
+        Get-NetFirewallRule -Name $mdnsName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+        New-NetFirewallRule -Name $mdnsName -DisplayName 'PrintBridge Public mDNS (UDP 5353)' -Group $group @mdnsParams | Out-Null
+        $mdnsActive = Get-NetFirewallRule -Name $mdnsName -PolicyStore ActiveStore -ErrorAction Stop
+        if ($mdnsActive.Enabled -ne 'True' -or $mdnsActive.Action -ne 'Allow') { throw "mDNS rule $mdnsName is not active." }
+    } else {
+        Get-NetFirewallRule -Name $mdnsName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    }
     $policy = Get-NetFirewallProfile -Name Public -PolicyStore ActiveStore
     if ($policy.Enabled -eq 'True' -and ($policy.AllowInboundRules -eq 'False' -or $policy.AllowLocalFirewallRules -eq 'False')) {
         throw 'Windows policy disables inbound or local firewall rules on Public. Contact your administrator.'
